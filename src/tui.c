@@ -3,6 +3,7 @@
 
 #include <ncurses.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -49,55 +50,9 @@ static void tui_init_colors(void)
 }
 
 /*
- * Load all events and payloads into memory for fast access.
- * For large traces this would need windowing, but for typical
- * pipelines (< 100k events) it fits easily.
- */
-static int tui_load_events(TuiState *ts)
-{
-    uint32_t n = ts->reader.num_events;
-    if (n == 0)
-        return 0;
-
-    ts->events   = calloc(n, sizeof(TraceEvent));
-    ts->payloads = calloc(n, sizeof(uint8_t *));
-    if (!ts->events || !ts->payloads)
-        return -1;
-
-    /* Seek to start of event data */
-    long events_start = (long)(sizeof(TraceFileHeader) +
-                        ts->reader.header.num_stages * sizeof(TraceStageHeader));
-    fseek(ts->reader.fp, events_start, SEEK_SET);
-
-    for (uint32_t i = 0; i < n; i++) {
-        if (fread(&ts->events[i], sizeof(TraceEvent), 1,
-                  ts->reader.fp) != 1)
-            break;
-
-        if (ts->events[i].payload_len > 0) {
-            ts->payloads[i] = malloc(ts->events[i].payload_len);
-            if (ts->payloads[i]) {
-                if (fread(ts->payloads[i], 1, ts->events[i].payload_len,
-                          ts->reader.fp) != ts->events[i].payload_len) {
-                    free(ts->payloads[i]);
-                    ts->payloads[i] = NULL;
-                }
-            } else {
-                fseek(ts->reader.fp, ts->events[i].payload_len, SEEK_CUR);
-            }
-        }
-        ts->num_loaded = i + 1;
-    }
-
-    /* Calculate total duration */
-    if (ts->num_loaded > 0)
-        ts->total_duration_ns = ts->events[ts->num_loaded - 1].timestamp_ns;
-
-    return 0;
-}
-
-/*
  * Compute stage states at a given event index by replaying from start.
+ * Since we don't hold the entire trace in memory anymore, we scan the
+ * index and only load payloads for EXIT/STATE events.
  */
 static void tui_compute_stage_states(TuiState *ts, uint32_t up_to_idx)
 {
@@ -105,33 +60,113 @@ static void tui_compute_stage_states(TuiState *ts, uint32_t up_to_idx)
     memset(ts->stage_states, SS_WAITING, ns);
     memset(ts->exit_codes, -1, ns * sizeof(int));
 
-    for (uint32_t i = 0; i <= up_to_idx && i < ts->num_loaded; i++) {
-        TraceEvent *e = &ts->events[i];
-        if (e->stage_id >= ns) continue;
+    for (uint32_t i = 0; i <= up_to_idx && i < ts->reader.num_events; i++) {
+        TraceIndexEntry *ie = &ts->reader.index[i];
+        if (ie->stage_id >= ns) continue;
 
-        switch (e->event_type) {
+        switch (ie->event_type) {
         case EVT_PROC_START:
-            ts->stage_states[e->stage_id] = SS_RUNNING;
+            ts->stage_states[ie->stage_id] = SS_RUNNING;
             break;
         case EVT_PROC_EXIT:
-            ts->stage_states[e->stage_id] = SS_EXITED;
-            if (e->payload_len >= 4 && ts->payloads[i])
-                memcpy(&ts->exit_codes[e->stage_id], ts->payloads[i], 4);
-            break;
-        case EVT_PROC_STATE:
-            if (e->payload_len >= 1 && ts->payloads[i]) {
-                ProcState ps = (ProcState)ts->payloads[i][0];
-                if (ps == PROC_SLEEPING || ps == PROC_DISK_SLEEP)
-                    ts->stage_states[e->stage_id] = SS_BLOCKED;
-                else if (ps == PROC_RUNNING)
-                    ts->stage_states[e->stage_id] = SS_RUNNING;
+            ts->stage_states[ie->stage_id] = SS_EXITED;
+            /* exit code payload is 4 bytes */
+            {
+                uint32_t code;
+                fseek(ts->reader.fp, (long)(ie->file_offset + sizeof(TraceEvent)), SEEK_SET);
+                if (fread(&code, 4, 1, ts->reader.fp) == 1)
+                    ts->exit_codes[ie->stage_id] = (int)code;
             }
             break;
+        case EVT_PROC_STATE: {
+            uint8_t ps_byte;
+            fseek(ts->reader.fp, (long)(ie->file_offset + sizeof(TraceEvent)), SEEK_SET);
+            if (fread(&ps_byte, 1, 1, ts->reader.fp) == 1) {
+                ProcState ps = (ProcState)ps_byte;
+                if (ps == PROC_SLEEPING || ps == PROC_DISK_SLEEP)
+                    ts->stage_states[ie->stage_id] = SS_BLOCKED;
+                else if (ps == PROC_RUNNING)
+                    ts->stage_states[ie->stage_id] = SS_RUNNING;
+            }
+            break;
+        }
         default:
             break;
         }
     }
 }
+
+static void tui_free_window(TuiState *ts)
+{
+    if (ts->events) {
+        uint32_t count = ts->window_end_idx - ts->window_start_idx;
+        for (uint32_t i = 0; i < count; i++) {
+            if (ts->payloads[i]) free(ts->payloads[i]);
+        }
+        free(ts->events);        ts->events = NULL;
+        free(ts->payloads);      ts->payloads = NULL;
+    }
+    ts->window_start_idx = 0;
+    ts->window_end_idx = 0;
+}
+
+static int tui_load_window(TuiState *ts, uint32_t center_idx)
+{
+    uint32_t n = ts->reader.num_events;
+    if (n == 0) return 0;
+
+    if (ts->window_capacity == 0)
+        ts->window_capacity = 20000;
+
+    uint32_t quarter = ts->window_capacity / 4;
+    int in_bounds = (ts->events != NULL &&
+                     center_idx >= ts->window_start_idx + quarter &&
+                     center_idx < ts->window_end_idx - quarter);
+
+    if (in_bounds && (!ts->live_mode || ts->window_end_idx == n))
+        return 0;
+
+    /* Rebuild window */
+    tui_free_window(ts);
+
+    uint32_t half = ts->window_capacity / 2;
+    uint32_t start = (center_idx > half) ? center_idx - half : 0;
+    uint32_t end = start + ts->window_capacity;
+    if (end > n) {
+        end = n;
+        start = (end > ts->window_capacity) ? end - ts->window_capacity : 0;
+    }
+
+    uint32_t count = end - start;
+    if (count > 0) {
+        ts->events = calloc(count, sizeof(TraceEvent));
+        ts->payloads = calloc(count, sizeof(uint8_t *));
+        
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t gidx = start + i;
+            if (trace_reader_read_event_at(&ts->reader, gidx, &ts->events[i], NULL, 0) == 0) {
+                if (ts->events[i].payload_len > 0) {
+                    ts->payloads[i] = malloc(ts->events[i].payload_len);
+                    if (ts->payloads[i]) {
+                        if (fread(ts->payloads[i], 1, ts->events[i].payload_len, ts->reader.fp) != ts->events[i].payload_len) {
+                            free(ts->payloads[i]);
+                            ts->payloads[i] = NULL;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ts->window_start_idx = start;
+    ts->window_end_idx = end;
+    
+    if (n > 0)
+        ts->total_duration_ns = ts->reader.index[n - 1].timestamp_ns;
+
+    return 0;
+}
+
+
 
 /* ---- Drawing functions ---- */
 
@@ -139,11 +174,10 @@ static void draw_header(TuiState *ts, int width)
 {
     attron(COLOR_PAIR(CP_HEADER) | A_BOLD);
     mvhline(0, 0, ' ', width);
-    mvprintw(0, 1, "PipeRewind: %s", ts->trace_path);
-
     char info[64];
-    snprintf(info, sizeof(info), "%u stages  %u events  [q]uit [?]help",
-             ts->reader.header.num_stages, ts->num_loaded);
+    snprintf(info, sizeof(info), " %d stages | %u events ",
+             ts->reader.header.num_stages, ts->reader.num_events);
+    mvprintw(0, 1, "PipeRewind %s", ts->trace_path);
     mvprintw(0, width - (int)strlen(info) - 1, "%s", info);
     attroff(COLOR_PAIR(CP_HEADER) | A_BOLD);
 }
@@ -183,7 +217,7 @@ static void draw_timeline(TuiState *ts, int row, int width)
 
     /* Event counter */
     mvprintw(row + 1, 1, "Event: %u / %u",
-             ts->current_event_idx + 1, ts->num_loaded);
+             ts->current_event_idx + 1, ts->reader.num_events);
 }
 
 static void draw_stages(TuiState *ts, int start_row, int width)
@@ -283,17 +317,18 @@ static void draw_data_panel(TuiState *ts, int start_row, int height,
 
     /* Show events near the current time for the selected stage */
     uint32_t idx = ts->current_event_idx;
-    TraceEvent *e = &ts->events[idx];
 
     /* Show a window of recent events around current position */
     /* First, find a window of events near current time */
     int window_start = (int)idx - 3;
     if (window_start < 0) window_start = 0;
     int window_end = (int)idx + 3;
-    if (window_end >= (int)ts->num_loaded) window_end = (int)ts->num_loaded - 1;
+    if (window_end >= (int)ts->reader.num_events) window_end = (int)ts->reader.num_events - 1;
 
     for (int i = window_start; i <= window_end && lines_used < data_rows; i++) {
-        e = &ts->events[i];
+        /* Check if event is in loaded window */
+        if (i < (int)ts->window_start_idx || i >= (int)ts->window_end_idx) continue;
+        TraceEvent *e = &ts->events[i - ts->window_start_idx];
         int is_current = (i == (int)idx);
         int is_selected_stage = ((int)e->stage_id == ts->selected_stage);
 
@@ -323,14 +358,14 @@ static void draw_data_panel(TuiState *ts, int start_row, int height,
 
         /* Show payload for current event or selected stage events */
         if ((is_current || is_selected_stage) &&
-            ts->payloads[i] && e->payload_len > 0 &&
+            ts->payloads[i - ts->window_start_idx] && e->payload_len > 0 &&
             lines_used < data_rows) {
 
             if (ts->hex_mode) {
                 uint32_t off = 0;
                 uint32_t bytes_per_line = 16;
                 while (off < e->payload_len && lines_used < data_rows - 1) {
-                    draw_hex_line(row, 3, ts->payloads[i], off,
+                    draw_hex_line(row, 3, ts->payloads[i - ts->window_start_idx], off,
                                   e->payload_len, width);
                     off += bytes_per_line;
                     row++;
@@ -338,7 +373,7 @@ static void draw_data_panel(TuiState *ts, int start_row, int height,
                 }
             } else {
                 /* ASCII mode: show lines of text */
-                const char *p = (const char *)ts->payloads[i];
+                const char *p = (const char *)ts->payloads[i - ts->window_start_idx];
                 uint32_t remaining = e->payload_len;
                 int max_show = width - 6;
 
@@ -417,16 +452,19 @@ static void draw_diff_panel(TuiState *ts, int start_row, int height, int width)
     const uint8_t *right_data = NULL;
     uint32_t       right_len  = 0;
 
-    for (uint32_t i = 0; i <= ts->current_event_idx && i < ts->num_loaded; i++) {
-        TraceEvent *e = &ts->events[i];
+    for (uint32_t i = 0; i <= ts->current_event_idx && i < ts->reader.num_events; i++) {
+        if (i < ts->window_start_idx || i >= ts->window_end_idx)
+            continue;
+        uint32_t local_idx = i - ts->window_start_idx;
+        TraceEvent *e = &ts->events[local_idx];
         if (e->stage_id == (uint32_t)sel && e->event_type == EVT_DATA_OUT &&
-            ts->payloads[i]) {
-            left_data = ts->payloads[i];
+            ts->payloads[local_idx]) {
+            left_data = ts->payloads[local_idx];
             left_len  = e->payload_len;
         }
         if (e->stage_id == (uint32_t)(sel + 1) && e->event_type == EVT_DATA_IN &&
-            ts->payloads[i]) {
-            right_data = ts->payloads[i];
+            ts->payloads[local_idx]) {
+            right_data = ts->payloads[local_idx];
             right_len  = e->payload_len;
         }
     }
@@ -534,19 +572,26 @@ static void draw_help_overlay(int height, int width)
 
 static void tui_goto_event(TuiState *ts, uint32_t idx)
 {
-    if (idx >= ts->num_loaded)
-        idx = ts->num_loaded - 1;
+    if (ts->reader.num_events == 0)
+        return;
 
+    if (idx >= ts->reader.num_events)
+        idx = ts->reader.num_events - 1;
+
+    tui_load_window(ts, idx);
     ts->current_event_idx = idx;
-    ts->current_time_ns   = ts->events[idx].timestamp_ns;
+
+    TraceIndexEntry *ie = &ts->reader.index[idx];
+    ts->current_time_ns = ie->timestamp_ns;
+
     tui_compute_stage_states(ts, idx);
 }
 
 static void tui_step_forward(TuiState *ts, int count)
 {
     uint32_t new_idx = ts->current_event_idx + (uint32_t)count;
-    if (new_idx >= ts->num_loaded)
-        new_idx = ts->num_loaded - 1;
+    if (new_idx >= ts->reader.num_events)
+        new_idx = ts->reader.num_events > 0 ? ts->reader.num_events - 1 : 0;
     tui_goto_event(ts, new_idx);
 }
 
@@ -566,15 +611,16 @@ static void tui_scrub(TuiState *ts, double fraction)
     uint64_t target_ns = (uint64_t)((double)ts->total_duration_ns * fraction);
 
     /* Binary search for nearest event */
-    uint32_t lo = 0, hi = ts->num_loaded;
+    if (ts->reader.num_events == 0) return;
+    uint32_t lo = 0, hi = ts->reader.num_events;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
-        if (ts->events[mid].timestamp_ns < target_ns)
+        if (ts->reader.index[mid].timestamp_ns < target_ns)
             lo = mid + 1;
         else
             hi = mid;
     }
-    if (lo >= ts->num_loaded) lo = ts->num_loaded - 1;
+    if (lo >= ts->reader.num_events) lo = ts->reader.num_events > 0 ? ts->reader.num_events - 1 : 0;
 
     tui_goto_event(ts, lo);
 }
@@ -599,22 +645,15 @@ int tui_run(const char *trace_path)
         return 1;
     }
 
-    if (tui_load_events(&ts) < 0) {
-        fprintf(stderr, "piperewind: failed to load events\n");
-        trace_reader_close(&ts.reader);
-        return 1;
-    }
+    /* Start at event 0 */
+    tui_goto_event(&ts, 0);
 
-    uint32_t ns = ts.reader.header.num_stages;
-    ts.stage_states = calloc(ns, sizeof(uint8_t));
-    ts.exit_codes   = calloc(ns, sizeof(int));
+    ts.stage_states = calloc(ts.reader.header.num_stages, 1);
+    ts.exit_codes   = calloc(ts.reader.header.num_stages, sizeof(int));
     if (!ts.stage_states || !ts.exit_codes) {
         trace_reader_close(&ts.reader);
         return 1;
     }
-
-    /* Start at event 0 */
-    tui_goto_event(&ts, 0);
 
     /* Initialize ncurses */
     initscr();
@@ -627,12 +666,23 @@ int tui_run(const char *trace_path)
     int show_help = 0;
     int running = 1;
 
+    if (ts.live_mode)
+        halfdelay(1); /* 100ms timeout for live updates */
+
     while (running) {
+        if (ts.live_mode) {
+            int new_events = trace_reader_refresh(&ts.reader);
+            if (new_events > 0 && ts.follow_mode) {
+                tui_goto_event(&ts, ts.reader.num_events - 1);
+            }
+        }
+
         int height, width;
         getmaxyx(stdscr, height, width);
         erase();
 
         /* Layout: header(1) + timeline(2) + stages(ns+1) + data(rest) + footer(1) */
+        uint32_t ns = ts.reader.header.num_stages;
         int stages_section = (int)ns + 1;
         int data_start = HEADER_ROWS + TIMELINE_ROWS + stages_section + 1;
         int data_height = height - data_start - FOOTER_ROWS;
@@ -654,8 +704,12 @@ int tui_run(const char *trace_path)
 
         refresh();
 
-        /* Handle input */
         int ch = getch();
+        if (ch == ERR) {
+            /* timeout, just loop back to refresh */
+            continue;
+        }
+
         if (show_help) {
             show_help = 0;
             continue;
@@ -671,13 +725,19 @@ int tui_run(const char *trace_path)
             show_help = 1;
             break;
 
+        case 'f':
+            ts.follow_mode = !ts.follow_mode;
+            break;
+
         case 'k':  /* step backward */
+            ts.follow_mode = 0;
             tui_step_backward(&ts, 1);
             break;
         case 'j':  /* step forward */
             tui_step_forward(&ts, 1);
             break;
         case 'K':  /* jump backward 10 */
+            ts.follow_mode = 0;
             tui_step_backward(&ts, 10);
             break;
         case 'J':  /* jump forward 10 */
@@ -711,10 +771,12 @@ int tui_run(const char *trace_path)
             break;
 
         case KEY_HOME:
+            ts.follow_mode = 0;
             tui_goto_event(&ts, 0);
             break;
         case KEY_END:
-            tui_goto_event(&ts, ts.num_loaded - 1);
+            ts.follow_mode = 1;
+            tui_goto_event(&ts, ts.reader.num_events - 1);
             break;
 
         case 'h':
@@ -733,13 +795,160 @@ int tui_run(const char *trace_path)
     /* Cleanup */
     endwin();
 
-    for (uint32_t i = 0; i < ts.num_loaded; i++)
-        free(ts.payloads[i]);
-    free(ts.events);
-    free(ts.payloads);
     free(ts.stage_states);
     free(ts.exit_codes);
     trace_reader_close(&ts.reader);
+    tui_free_window(&ts);
+    return 0;
+}
+
+/* ---- Live mode wrapper ---- */
+
+#include "capture.h"
+
+struct LiveCaptureArgs {
+    CaptureEngine ce;
+    int done;
+};
+
+static void *capture_thread_func(void *arg)
+{
+    struct LiveCaptureArgs *args = (struct LiveCaptureArgs *)arg;
+    capture_run(&args->ce);
+    capture_destroy(&args->ce);
+    args->done = 1;
+    return NULL;
+}
+
+int tui_run_live(const char *trace_path, const char *pipeline_cmd)
+{
+    struct LiveCaptureArgs args;
+    memset(&args, 0, sizeof(args));
+
+    if (capture_init(&args.ce, pipeline_cmd, trace_path, 0) < 0) {
+        fprintf(stderr, "Error: failed to initialize capture engine\n");
+        return -1;
+    }
+
+    TuiState ts;
+    memset(&ts, 0, sizeof(ts));
+    ts.trace_path = trace_path;
+    ts.live_mode = 1;
+    ts.follow_mode = 1;
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, capture_thread_func, &args) != 0) {
+        fprintf(stderr, "Error: failed to create capture thread\n");
+        capture_destroy(&args.ce);
+        return -1;
+    }
+
+    /* Wait briefly for headers to be written before reader opens */
+    for (int i = 0; i < 50; i++) {
+        if (trace_reader_open(&ts.reader, trace_path) == 0)
+            break;
+        usleep(10000); /* 10ms */
+    }
+
+    if (!ts.reader.fp) {
+        fprintf(stderr, "Error: failed to open trace reader for live file\n");
+        pthread_join(thread, NULL);
+        return -1;
+    }
+
+    tui_load_window(&ts, 0);
+    tui_compute_stage_states(&ts, 0);
+
+    /* Run the TUI */
+    initscr();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    curs_set(0);
+    tui_init_colors();
+
+    halfdelay(1); /* 100ms timeout */
+    int show_help = 0;
+    int running = 1;
+
+    while (running) {
+        int new_events = trace_reader_refresh(&ts.reader);
+        if (new_events > 0 && ts.follow_mode) {
+            tui_goto_event(&ts, ts.reader.num_events - 1);
+        }
+
+        int height, width;
+        getmaxyx(stdscr, height, width);
+        erase();
+
+        uint32_t ns = ts.reader.header.num_stages;
+        int stages_section = (int)ns + 1;
+        int data_start = HEADER_ROWS + TIMELINE_ROWS + stages_section + 1;
+        int data_height = height - data_start - FOOTER_ROWS;
+        if (data_height < DATA_MIN_ROWS) data_height = DATA_MIN_ROWS;
+
+        draw_header(&ts, width);
+        draw_timeline(&ts, HEADER_ROWS, width);
+        draw_stages(&ts, HEADER_ROWS + TIMELINE_ROWS, width);
+
+        if (ts.diff_mode)
+            draw_diff_panel(&ts, data_start, data_height, width);
+        else
+            draw_data_panel(&ts, data_start, data_height, width);
+
+        draw_footer(height - 1, width);
+
+        if (show_help)
+            draw_help_overlay(height, width);
+
+        refresh();
+
+        int ch = getch();
+        if (ch == ERR) {
+            if (args.done && ts.follow_mode) {
+                /* Capture is done, follow mode is on, no user input: we can wait blockingly now?
+                 * Actually, keep halfdelay so user doesn't get stuck */
+            }
+            continue;
+        }
+
+        if (show_help) {
+            show_help = 0;
+            continue;
+        }
+
+        switch (ch) {
+        case 'q':
+        case 'Q': running = 0; break;
+        case '?': show_help = 1; break;
+        case 'f': ts.follow_mode = !ts.follow_mode; break;
+        case 'k': ts.follow_mode = 0; tui_step_backward(&ts, 1); break;
+        case 'j': tui_step_forward(&ts, 1); break;
+        case 'K': ts.follow_mode = 0; tui_step_backward(&ts, 10); break;
+        case 'J': tui_step_forward(&ts, 10); break;
+        case KEY_UP: if (ts.selected_stage > 0) ts.selected_stage--; break;
+        case KEY_DOWN: if ((uint32_t)ts.selected_stage < ns - 1) ts.selected_stage++; break;
+        case KEY_HOME: ts.follow_mode = 0; tui_goto_event(&ts, 0); break;
+        case KEY_END: ts.follow_mode = 1; tui_goto_event(&ts, ts.reader.num_events - 1); break;
+        case 'h': ts.hex_mode = !ts.hex_mode; break;
+        case 'd': ts.diff_mode = !ts.diff_mode; break;
+        case 's': ts.show_all_stages = !ts.show_all_stages; break;
+        default: break;
+        }
+    }
+
+    endwin();
+
+    trace_reader_close(&ts.reader);
+    tui_free_window(&ts);
+
+    /* Clean up background thread if it's still running */
+    if (!args.done) {
+        /* Pipelined processes will exit when the TUI exits if we kill them?
+         * For now, just detach or wait */
+        pthread_cancel(thread);
+    }
+    pthread_join(thread, NULL);
 
     return 0;
 }

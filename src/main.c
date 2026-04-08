@@ -15,12 +15,14 @@ static void usage(const char *prog)
         "\n"
         "Usage:\n"
         "  %s record  [-v] [-o trace.prt] \"cmd1 | cmd2 | cmd3\"\n"
-        "  %s replay  [-s stage] [-t time_ms] trace.prt\n"
+        "  %s replay  trace.prt\n"
+        "  %s live    [-o trace.prt] \"cmd1 | cmd2 | cmd3\"\n"
         "  %s dump    trace.prt\n"
         "\n"
         "Commands:\n"
-        "  record   Run a pipeline and record all inter-stage data\n"
-        "  replay   (future) Open the TUI to scrub through a recording\n"
+        "  record   Run a pipeline and record all inter-stage data into a file\n"
+        "  replay   Open the TUI to scrub through a recording\n"
+        "  live     Run pipeline and open TUI immediately to watch data live\n"
         "  dump     Print all events in a trace file (text format)\n"
         "\n"
         "Options:\n"
@@ -33,7 +35,7 @@ static void usage(const char *prog)
         "Examples:\n"
         "  %s record \"cat /var/log/syslog | grep error | sort | uniq -c\"\n"
         "  %s dump trace.prt\n",
-        prog, prog, prog, prog, prog);
+        prog, prog, prog, prog, prog, prog);
 }
 
 /* ---- dump command ---- */
@@ -217,7 +219,29 @@ int main(int argc, char **argv)
         return tui_run(argv[2]);
     }
 
-    fprintf(stderr, "piperewind: unknown command '%s'\n", cmd);
+    if (strcmp(cmd, "live") == 0) {
+        const char *trace_path = "trace.prt";
+
+        int opt;
+        optind = 2;  /* start after "live" */
+        while ((opt = getopt(argc, argv, "o:h")) != -1) {
+            switch (opt) {
+            case 'o': trace_path = optarg; break;
+            case 'h': usage(argv[0]); return 0;
+            default:  usage(argv[0]); return 1;
+            }
+        }
+
+        if (optind >= argc) {
+            fprintf(stderr, "Error: missing pipeline command.\n");
+            usage(argv[0]);
+            return 1;
+        }
+
+        return tui_run_live(trace_path, argv[optind]);
+    }
+
+    fprintf(stderr, "Error: unknown command '%s'\n", cmd);
     usage(argv[0]);
     return 1;
 }

@@ -3,6 +3,7 @@
 
 #include "trace.h"
 #include "diff.h"
+#include <pthread.h>
 
 /*
  * PipeRewind TUI - ncurses-based time-travel replay viewer
@@ -51,10 +52,18 @@ typedef struct {
     int           show_all_stages;     /* 0 = selected only, 1 = all */
     int           diff_mode;           /* 0 = normal, 1 = diff view */
 
-    /* Preloaded events for current view window */
-    TraceEvent   *events;
+    /* Windowed loading cache */
+    uint32_t      window_start_idx;
+    uint32_t      window_end_idx;      /* exclusive */
+    TraceEvent   *events;              /* dynamically loaded chunk */
     uint8_t     **payloads;
-    uint32_t      num_loaded;
+    uint32_t      window_capacity;     /* max allowed in window */
+
+    /* Live Mode */
+    int           live_mode;           /* 0 = static file, 1 = live attach */
+    int           follow_mode;         /* 1 = auto-scroll to newest event */
+    pthread_t     capture_thread;
+    int           capture_running;
 
     /* Stage state tracking */
     uint8_t      *stage_states;  /* per-stage: 0=waiting, 1=running, 2=exited */
@@ -62,10 +71,9 @@ typedef struct {
 } TuiState;
 
 /*
- * Open the TUI on a trace file.
- * Takes over the terminal until the user quits.
- * Returns 0 on normal exit.
+ * Entry points
  */
 int tui_run(const char *trace_path);
+int tui_run_live(const char *trace_path, const char *pipeline_cmd);
 
 #endif /* PIPEREWIND_TUI_H */

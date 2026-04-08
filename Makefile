@@ -1,6 +1,6 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -Werror -std=c99 -D_GNU_SOURCE -g -O2
-LDFLAGS = -lncurses
+LDFLAGS = -lncurses -lpthread
 INCLUDES = -Iinclude
 
 SRC_DIR = src

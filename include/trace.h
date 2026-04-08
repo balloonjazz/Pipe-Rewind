@@ -91,6 +91,7 @@ typedef struct {
 
     /* Loaded index for random access */
     TraceIndexEntry *index;
+    uint32_t         index_cap;
     uint32_t         num_events;
 } TraceReader;
 
@@ -106,13 +107,13 @@ void trace_writer_close(TraceWriter *tw);
 
 /* Reader API */
 int  trace_reader_open(TraceReader *tr, const char *path);
+int  trace_reader_refresh(TraceReader *tr);
 int  trace_reader_seek_time(TraceReader *tr, uint64_t timestamp_ns);
+int  trace_reader_read_event_at(TraceReader *tr, uint32_t event_idx,
+                                TraceEvent *evt, void *payload_buf,
+                                uint32_t buf_size);
 int  trace_reader_next_event(TraceReader *tr, TraceEvent *evt,
                              void *payload_buf, uint32_t buf_size);
-int  trace_reader_get_events_for_stage(TraceReader *tr, uint32_t stage_id,
-                                       uint64_t from_ns, uint64_t to_ns,
-                                       TraceEvent **events, void ***payloads,
-                                       uint32_t *count);
 void trace_reader_close(TraceReader *tr);
 
 /* Utility */

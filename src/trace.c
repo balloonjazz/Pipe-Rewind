@@ -108,6 +108,7 @@ int trace_writer_record(TraceWriter *tw, uint32_t stage_id,
     ie->event_type   = (uint8_t)type;
 
     tw->num_events++;
+    fflush(tw->fp);
     return 0;
 }
 
@@ -184,8 +185,14 @@ int trace_reader_open(TraceReader *tr, const char *path)
 
     /* Load index from end of file */
     tr->num_events = tr->header.num_events;
+    tr->index_cap  = tr->num_events > 0 ? tr->num_events : 256;
+    if (tr->index_cap > 0) {
+        tr->index = calloc(tr->index_cap, sizeof(TraceIndexEntry));
+        if (!tr->index)
+            goto fail;
+    }
+
     if (tr->num_events > 0) {
-        tr->index = calloc(tr->num_events, sizeof(TraceIndexEntry));
         if (!tr->index)
             goto fail;
 
@@ -249,14 +256,87 @@ int trace_reader_next_event(TraceReader *tr, TraceEvent *evt,
     return 0;
 }
 
+int trace_reader_refresh(TraceReader *tr)
+{
+    /* Find the last known event boundary */
+    long pos;
+    if (tr->num_events == 0) {
+        pos = (long)(sizeof(TraceFileHeader) +
+                     tr->header.num_stages * sizeof(TraceStageHeader));
+    } else {
+        /*
+         * Cannot just use tr->index[num_events-1].offset because that's the
+         * timestamp or relative offset? Wait, trace.h says:
+         * uint64_t timestamp_ns; uint64_t file_offset;
+         * Wait, trace.c writes the index during finalize or dynamically?
+         */
+        pos = (long)tr->index[tr->num_events - 1].file_offset;
+        
+        /* We need to advance past the last event's payload */
+        /* But wait, we don't know the last event's size unless we read it! */
+        /* Let's just seek to pos, read the event header, skip payload */
+        fseek(tr->fp, pos, SEEK_SET);
+        TraceEvent evt;
+        if (fread(&evt, sizeof(evt), 1, tr->fp) != 1)
+            return 0; /* nothing here? */
+        pos += sizeof(TraceEvent) + evt.payload_len;
+    }
+
+    /* Keep reading appended events dynamically */
+    int new_events = 0;
+    while (1) {
+        fseek(tr->fp, pos, SEEK_SET);
+        TraceEvent evt;
+        if (fread(&evt, sizeof(evt), 1, tr->fp) != 1)
+            break;
+
+        /* Expand index if full */
+        if (tr->num_events >= tr->index_cap) {
+            uint32_t new_cap = tr->index_cap ? tr->index_cap * 2 : 256;
+            TraceIndexEntry *new_idx = realloc(tr->index,
+                                               new_cap * sizeof(TraceIndexEntry));
+            if (!new_idx) break; /* OOM */
+            tr->index = new_idx;
+            tr->index_cap = new_cap;
+        }
+
+        tr->index[tr->num_events].timestamp_ns = evt.timestamp_ns;
+        tr->index[tr->num_events].file_offset  = (uint64_t)pos;
+        tr->num_events++;
+        new_events++;
+
+        pos += sizeof(TraceEvent) + evt.payload_len;
+    }
+    return new_events;
+}
+
+int trace_reader_read_event_at(TraceReader *tr, uint32_t event_idx,
+                               TraceEvent *evt, void *payload_buf,
+                               uint32_t buf_size)
+{
+    if (event_idx >= tr->num_events)
+        return -1;
+
+    fseek(tr->fp, (long)tr->index[event_idx].file_offset, SEEK_SET);
+    if (fread(evt, sizeof(TraceEvent), 1, tr->fp) != 1)
+        return -1;
+
+    if (evt->payload_len > 0 && payload_buf) {
+        if (buf_size < evt->payload_len)
+            return -1;
+        if (fread(payload_buf, 1, evt->payload_len, tr->fp) != evt->payload_len)
+            return -1;
+    } else if (evt->payload_len > 0) {
+        /* Skip payload if requested */
+        fseek(tr->fp, evt->payload_len, SEEK_CUR);
+    }
+    return 0;
+}
+
 void trace_reader_close(TraceReader *tr)
 {
-    if (tr->fp) {
-        fclose(tr->fp);
-        tr->fp = NULL;
-    }
-    free(tr->stages);
-    tr->stages = NULL;
-    free(tr->index);
-    tr->index = NULL;
+    if (tr->fp)     fclose(tr->fp);
+    if (tr->stages) free(tr->stages);
+    if (tr->index)  free(tr->index);
+    memset(tr, 0, sizeof(*tr));
 }
