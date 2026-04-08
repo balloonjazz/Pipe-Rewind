@@ -1,0 +1,134 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{mdframed}
+\usepackage{caption}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\title{\textbf{PipeRewind}\\ \Large A Time-Travel Debugger for Shell Pipelines}
+\author{Luiz Takahashi \& Ehzoc Chavez}
+\date{\vspace{-5ex}}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+\noindent Shell pipelines are incredibly powerful but famously opaque. Identifying the root cause of a failure in a long chain of commands often requires cumbersome workarounds like injecting \texttt{tee} to inspect intermediate data. This document explores \textbf{PipeRewind}, a time-travel debugger written in C that solves this problem. PipeRewind transparently interposes data streams, monitors process states, logs everything sequentially, and provides both interactive scrubbing capabilities (replay) and real-time live-attachment features via an \texttt{ncurses} terminal user interface.
+\end{abstract}
+
+\vspace{2ex}
+\tableofcontents
+\newpage
+
+\section{What PipeRewind Really Is}
+PipeRewind is an extremely precise debugging framework specifically designed to observe, capture, and visualize the execution of standard UNIX shell pipelines. 
+
+When a user strings together a command sequence such as \texttt{cmd A | cmd B | cmd C}, PipeRewind sits silently between the interconnected \texttt{stdout} and \texttt{stdin} file descriptors of each process. It intercepts every byte of data passing through the system, measures the exact time standard events occur (like process creation, sleeping, and dying), and records these transactions into a proprietary binary \texttt{.prt} (PipeRewind Trace) trace file. Waitings, blockages, and textual outputs are indexed seamlessly. 
+
+Finally, a dedicated graphical \texttt{ncurses} application enables engineers to playback, scrub back-and-forth in time, and view comparative differences in the transmitted data payload. 
+
+\section{Why It Matters}
+The standard philosophy of Unix operates on text streams running linearly between disparate utility binaries. While this flexibility allows amazing combinations, it introduces catastrophic opacity. When a pipeline fails (e.g., outputs zero lines, or crashes), tracing \emph{where} exactly the failure originated is notoriously difficult. Was \texttt{cmd A} producing malformed inputs, or did \texttt{cmd B} incorrectly parse them?
+
+\textbf{Traditional Solutions Fall Short:}
+\begin{itemize}
+    \item \textbf{\texttt{strace}:} Too low-level and noisy; sifting through thousands of system calls across multiple heavily forked processes is mentally exhausting.
+    \item \textbf{\texttt{tee}:} Manually restructuring the command strings with \texttt{tee ./dump1.txt | cmd B | tee ./dump2.txt} litters the filesystem, requires modifying the source scripts, and loses timing information entirely.
+\end{itemize}
+
+PipeRewind solves this. Instead of retrofitting debuggers or modifying scripts, you inject \texttt{piperewind.c} exactly once and immediately get an immutable history map of not just the variables, but the actual textual data passed along dynamically. 
+
+\section{Core Capabilities}
+PipeRewind elevates typical shell monitoring. The major capabilities incorporated include:
+\begin{enumerate}
+    \item \textbf{Transparent High-Speed Interception:} Using Linux \texttt{epoll()} capabilities to monitor descriptors asynchronously, recording throughput efficiently with unnoticeable CPU overhead.
+    \item \textbf{Process State Polling:} Tracking \texttt{/proc/[pid]/status} in the background to discern if a process is \texttt{RUNNING}, \texttt{BLOCKED}, or \texttt{EXITED}.
+    \item \textbf{Side-by-Side Diff Panel:} Comparing \texttt{DATA\_OUT} from Stage N against \texttt{DATA\_IN} to Stage N+1, visualizing exactly what payload transitioned downstream via a Longest-Common-Subsequence algorithm.
+    \item \textbf{Windowed Trace Loading:} Processing massive pipeline topologies by implementing a smart memory sliding-window mechanism over trace logs—providing fast scrubbing capabilities without OOM (out-of-memory) crashes.
+    \item \textbf{Live-Attach Mode:} Spawning the terminal UI interface immediately while executing the pipeline concurrently, trailing process data as it enters dynamically using synchronized daemon threading.
+\end{enumerate}
+
+\section{Code Structure and Architecture}
+The project relies exclusively on C99, structured systematically around UNIX system methodologies:
+
+\begin{itemize}
+    \item \textbf{\texttt{src/pipeline.c}:} A state-machine parser. Rather than naive string-splitting, it interprets UNIX shell tokens natively (processing single/double escaping constraints perfectly) before executing commands.
+    \item \textbf{\texttt{src/capture.c}:} The interception engine. Invokes processes, handles anonymous \texttt{dup2()} pipe bridging, and reacts asynchronously to buffer dispatches via \texttt{epoll}.
+    \item \textbf{\texttt{src/procstate.c}:} Context-aware telemetry module reading localized Kernel \texttt{/proc} values inside tight feedback loops to identify schedule blocking anomalies.
+    \item \textbf{\texttt{src/trace.c}:} Handles writing and reading data onto disk format. Encapsulates dynamic index capacity expansion so queries like ``give me data belonging to stage N at timestamp T'' map directly to disk payload jumps natively.
+    \item \textbf{\texttt{src/tui.c} \& \texttt{src/diff.c}:} The graphical component. Computes window timelines, renders events sequentially over visual buffers, manages asynchronous pthreads binding `Live` pipelines to updates, and dynamically LCS diffs consecutive payload fragments.
+\end{itemize}
+
+\section{How to Use PipeRewind}
+Using PipeRewind follows intuitive syntax mimicking standard Unix command-line execution interfaces.
+
+\subsection{Compilation}
+The project incorporates a basic Makefile. Ensure you have GCC and \texttt{libncurses-dev} dependencies satisfied natively. 
+\begin{lstlisting}[language=bash]
+# Simply compile all modules locally
+make clean && make
+\end{lstlisting}
+
+\subsection{Execution Modes}
+PipeRewind allows multi-stage operation.
+\begin{itemize}
+    \item \textbf{\texttt{record}:} Creates a headless capturing session and outputs data directly onto the disk (defaults to \texttt{trace.prt}).
+\begin{lstlisting}[language=bash]
+./piperewind record "cat /var/log/syslog | grep error | sort"
+\end{lstlisting}
+    
+    \item \textbf{\texttt{replay}:} Summons the visual graphical UI (TUI) overlay rendering pipeline data streams out over time natively.
+\begin{lstlisting}[language=bash]
+./piperewind replay trace.prt
+\end{lstlisting}
+    
+    \item \textbf{\texttt{live}:} Instantiates real-time debugging. The capture engine spins up as an isolated thread in the background, drawing timeline updates transparently back into the TUI frame utilizing follow/auto-scroll heuristics.
+\begin{lstlisting}[language=bash]
+./piperewind live "tail -f /var/log/nginx/access.log | jq ."
+\end{lstlisting}
+\end{itemize}
+
+\subsection{TUI Hotkeys}
+While inside the \texttt{ncurses} view:
+\begin{itemize}
+    \item \textbf{Up/Down Arrows:} Shift selection highlight across interacting stages.
+    \item \textbf{j / k:} Frame-step timeline indexes forward or backwards in time.
+    \item \textbf{J / K:} Fast scrubbing (10 index gaps).
+    \item \textbf{d:} Toggles the Side-by-Side Diff interface analyzing data modifications between parallel downstream buffers directly.
+    \item \textbf{f:} Toggles timeline ``Follow Mode'' binding navigation automatically to late-joining live daemon updates.
+    \item \textbf{q:} Exit the trace interface confidently.
+\end{itemize}
+
+\end{document}
