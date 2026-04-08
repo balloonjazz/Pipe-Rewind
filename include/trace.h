@@ -47,6 +47,7 @@ typedef enum {
     EVT_PROC_START = 3, /* stage process started */
     EVT_PROC_EXIT  = 4, /* stage process exited */
     EVT_PIPE_EOF   = 5, /* EOF on a pipe */
+    EVT_PROC_STATE = 6, /* process scheduling state snapshot */
 } TraceEventType;
 
 /* Each event in the stream */

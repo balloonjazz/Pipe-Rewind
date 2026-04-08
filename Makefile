@@ -11,7 +11,9 @@ SRCS = $(SRC_DIR)/main.c \
        $(SRC_DIR)/pipeline.c \
        $(SRC_DIR)/capture.c \
        $(SRC_DIR)/trace.c \
-       $(SRC_DIR)/tui.c
+       $(SRC_DIR)/tui.c \
+       $(SRC_DIR)/procstate.c \
+       $(SRC_DIR)/diff.c
 
 OBJS = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
 
@@ -45,4 +47,13 @@ test: $(BIN)
 	./$(BIN) record -v -o test3.prt "echo -e 'a\nb\na\nc\nb\na' | sort | uniq -c | sort -rn"
 	./$(BIN) dump test3.prt
 	@echo ""
+	@echo "=== Test 4: Single-quoted arguments ==="
+	./$(BIN) record -v -o test4.prt "echo 'hello world' | grep 'hello world'"
+	./$(BIN) dump test4.prt
+	@echo ""
+	@echo "=== Test 5: Double-quoted arguments ==="
+	./$(BIN) record -v -o test5.prt 'echo "foo bar baz" | cat'
+	./$(BIN) dump test5.prt
+	@echo ""
 	@echo "All tests passed."
+

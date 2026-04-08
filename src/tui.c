@@ -1,4 +1,5 @@
 #include "tui.h"
+#include "procstate.h"
 
 #include <ncurses.h>
 #include <stdlib.h>
@@ -28,6 +29,7 @@
 #define SS_WAITING  0
 #define SS_RUNNING  1
 #define SS_EXITED   2
+#define SS_BLOCKED  3
 
 static void tui_init_colors(void)
 {
@@ -115,6 +117,15 @@ static void tui_compute_stage_states(TuiState *ts, uint32_t up_to_idx)
             ts->stage_states[e->stage_id] = SS_EXITED;
             if (e->payload_len >= 4 && ts->payloads[i])
                 memcpy(&ts->exit_codes[e->stage_id], ts->payloads[i], 4);
+            break;
+        case EVT_PROC_STATE:
+            if (e->payload_len >= 1 && ts->payloads[i]) {
+                ProcState ps = (ProcState)ts->payloads[i][0];
+                if (ps == PROC_SLEEPING || ps == PROC_DISK_SLEEP)
+                    ts->stage_states[e->stage_id] = SS_BLOCKED;
+                else if (ps == PROC_RUNNING)
+                    ts->stage_states[e->stage_id] = SS_RUNNING;
+            }
             break;
         default:
             break;
@@ -206,6 +217,10 @@ static void draw_stages(TuiState *ts, int start_row, int width)
         case SS_EXITED:
             state_str = "EXITED";
             state_cp  = CP_EXITED;
+            break;
+        case SS_BLOCKED:
+            state_str = "BLOCKED";
+            state_cp  = CP_BLOCKED;
             break;
         default:
             state_str = "WAITING";
@@ -365,19 +380,128 @@ static void draw_data_panel(TuiState *ts, int start_row, int height,
     }
 }
 
+/* ---- Diff panel ---- */
+
+/*
+ * Color pairs for diff: reuse CP_DATA_OUT for SAME, CP_EXITED for REMOVED,
+ * CP_DATA_IN for ADDED.
+ */
+#define CP_DIFF_SAME    CP_DATA_OUT
+#define CP_DIFF_REMOVED CP_EXITED
+#define CP_DIFF_ADDED   CP_DATA_IN
+
+static void draw_diff_panel(TuiState *ts, int start_row, int height, int width)
+{
+    int row = start_row;
+    int sel = ts->selected_stage;
+    uint32_t ns = ts->reader.header.num_stages;
+
+    attron(A_BOLD);
+    mvhline(row, 0, ACS_HLINE, width);
+    mvprintw(row, 1, " Diff: Stage %d OUT vs Stage %d IN ",
+             sel, sel + 1);
+    attroff(A_BOLD);
+    row++;
+
+    int panel_rows = height - 1;
+
+    if (sel < 0 || (uint32_t)sel >= ns - 1) {
+        mvprintw(row, 3, "(Select a stage with a downstream neighbor for diff)");
+        return;
+    }
+
+    /* Find the latest DATA_OUT for selected stage and DATA_IN for next stage
+     * at or before the current event index */
+    const uint8_t *left_data  = NULL;
+    uint32_t       left_len   = 0;
+    const uint8_t *right_data = NULL;
+    uint32_t       right_len  = 0;
+
+    for (uint32_t i = 0; i <= ts->current_event_idx && i < ts->num_loaded; i++) {
+        TraceEvent *e = &ts->events[i];
+        if (e->stage_id == (uint32_t)sel && e->event_type == EVT_DATA_OUT &&
+            ts->payloads[i]) {
+            left_data = ts->payloads[i];
+            left_len  = e->payload_len;
+        }
+        if (e->stage_id == (uint32_t)(sel + 1) && e->event_type == EVT_DATA_IN &&
+            ts->payloads[i]) {
+            right_data = ts->payloads[i];
+            right_len  = e->payload_len;
+        }
+    }
+
+    if (!left_data && !right_data) {
+        mvprintw(row, 3, "(No data events for these stages yet)");
+        return;
+    }
+
+    /* Compute diff */
+    DiffResult dr;
+    if (diff_compute(left_data ? left_data : (const uint8_t *)"", left_len,
+                     right_data ? right_data : (const uint8_t *)"", right_len,
+                     &dr) < 0) {
+        mvprintw(row, 3, "(Diff computation failed)");
+        return;
+    }
+
+    /* Draw diff lines */
+    int max_show = width - 6;
+    int lines_shown = 0;
+
+    for (int i = 0; i < dr.num_lines && lines_shown < panel_rows; i++) {
+        DiffLine *dl = &dr.lines[i];
+        char prefix;
+        int cp;
+
+        switch (dl->type) {
+        case DIFF_SAME:    prefix = ' '; cp = CP_DIFF_SAME;    break;
+        case DIFF_REMOVED: prefix = '-'; cp = CP_DIFF_REMOVED; break;
+        case DIFF_ADDED:   prefix = '+'; cp = CP_DIFF_ADDED;   break;
+        default:           prefix = '?'; cp = CP_DIFF_SAME;    break;
+        }
+
+        attron(COLOR_PAIR(cp));
+        if (dl->type != DIFF_SAME)
+            attron(A_BOLD);
+
+        mvprintw(row, 1, "%c ", prefix);
+
+        int show_len = dl->len;
+        if (show_len > max_show)
+            show_len = max_show;
+
+        for (int c = 0; c < show_len; c++) {
+            if (isprint((unsigned char)dl->text[c]))
+                addch(dl->text[c]);
+            else
+                addch('.');
+        }
+
+        if (dl->type != DIFF_SAME)
+            attroff(A_BOLD);
+        attroff(COLOR_PAIR(cp));
+
+        row++;
+        lines_shown++;
+    }
+
+    diff_free(&dr);
+}
+
 static void draw_footer(int row, int width)
 {
     attron(COLOR_PAIR(CP_HELP));
     mvhline(row, 0, ' ', width);
     mvprintw(row, 1,
-        "[</>] scrub  [j/k] step  [up/dn] stage  "
-        "[h] hex  [Home/End] jump  [q] quit");
+        "[</> ] scrub  [j/k] step  [up/dn] stage  "
+        "[h] hex  [d] diff  [Home/End] jump  [q] quit");
     attroff(COLOR_PAIR(CP_HELP));
 }
 
 static void draw_help_overlay(int height, int width)
 {
-    int bh = 16, bw = 52;
+    int bh = 18, bw = 52;
     int by = (height - bh) / 2;
     int bx = (width - bw) / 2;
 
@@ -392,15 +516,16 @@ static void draw_help_overlay(int height, int width)
     mvprintw(by + 4,  bx + 2, "J / K           Jump 10 events");
     mvprintw(by + 5,  bx + 2, "Up / Down       Select pipeline stage");
     mvprintw(by + 6,  bx + 2, "h               Toggle hex / ASCII view");
-    mvprintw(by + 7,  bx + 2, "Home / End      Jump to start / end");
-    mvprintw(by + 8,  bx + 2, "s               Toggle show all / selected");
-    mvprintw(by + 9,  bx + 2, "q               Quit");
-    mvhline( by + 10, bx, ACS_HLINE, bw);
-    mvprintw(by + 11, bx + 2, "Data panel shows bytes flowing");
-    mvprintw(by + 12, bx + 2, "between stages at current time.");
-    mvprintw(by + 13, bx + 2, "Use hex mode (h) for binary data.");
-    mvhline( by + 14, bx, ACS_HLINE, bw);
-    mvprintw(by + 15, bx + 2, "Press any key to close");
+    mvprintw(by + 7,  bx + 2, "d               Toggle diff view");
+    mvprintw(by + 8,  bx + 2, "Home / End      Jump to start / end");
+    mvprintw(by + 9,  bx + 2, "s               Toggle show all / selected");
+    mvprintw(by + 10, bx + 2, "q               Quit");
+    mvhline( by + 11, bx, ACS_HLINE, bw);
+    mvprintw(by + 12, bx + 2, "Data panel shows bytes flowing");
+    mvprintw(by + 13, bx + 2, "between stages at current time.");
+    mvprintw(by + 14, bx + 2, "Use hex mode (h) for binary data.");
+    mvhline( by + 15, bx, ACS_HLINE, bw);
+    mvprintw(by + 16, bx + 2, "Press any key to close");
 
     attroff(COLOR_PAIR(CP_HEADER));
 }
@@ -516,7 +641,12 @@ int tui_run(const char *trace_path)
         draw_header(&ts, width);
         draw_timeline(&ts, HEADER_ROWS, width);
         draw_stages(&ts, HEADER_ROWS + TIMELINE_ROWS, width);
-        draw_data_panel(&ts, data_start, data_height, width);
+
+        if (ts.diff_mode)
+            draw_diff_panel(&ts, data_start, data_height, width);
+        else
+            draw_data_panel(&ts, data_start, data_height, width);
+
         draw_footer(height - 1, width);
 
         if (show_help)
@@ -589,6 +719,10 @@ int tui_run(const char *trace_path)
 
         case 'h':
             ts.hex_mode = !ts.hex_mode;
+            break;
+
+        case 'd':
+            ts.diff_mode = !ts.diff_mode;
             break;
 
         default:

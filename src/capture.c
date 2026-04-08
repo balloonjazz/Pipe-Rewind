@@ -1,4 +1,5 @@
 #include "capture.h"
+#include "procstate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,6 +124,10 @@ int capture_run(CaptureEngine *ce)
                 "monitoring %d fds\n", n, num_active);
     }
 
+    /* Track last-seen process state to emit only on change */
+    ProcState last_state[MAX_STAGES];
+    memset(last_state, 0, sizeof(last_state));
+
     /* Event loop */
     uint8_t buf[CAPTURE_BUF_SIZE];
     struct epoll_event events[MAX_EPOLL_EVENTS];
@@ -157,6 +162,27 @@ int capture_run(CaptureEngine *ce)
                         fprintf(stderr, "piperewind: stage %d (%s) "
                                 "exited with code %d\n",
                                 i, ce->pipeline.stages[i].raw_cmd, code);
+                    }
+                }
+            }
+        }
+
+        /* Poll /proc for process state changes (on epoll timeout) */
+        if (nready == 0) {
+            for (int i = 0; i < n; i++) {
+                if (ce->exec.procs[i].pid <= 0)
+                    continue;
+
+                ProcState cur = proc_read_state(ce->exec.procs[i].pid);
+                if (cur != PROC_UNKNOWN && cur != last_state[i]) {
+                    last_state[i] = cur;
+                    uint8_t state_byte = (uint8_t)cur;
+                    trace_writer_record(&ce->writer, (uint32_t)i,
+                                        EVT_PROC_STATE,
+                                        &state_byte, 1);
+                    if (ce->verbose) {
+                        fprintf(stderr, "piperewind: stage %d state -> %s\n",
+                                i, proc_state_str(cur));
                     }
                 }
             }

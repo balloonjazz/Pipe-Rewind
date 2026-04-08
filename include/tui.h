@@ -2,6 +2,7 @@
 #define PIPEREWIND_TUI_H
 
 #include "trace.h"
+#include "diff.h"
 
 /*
  * PipeRewind TUI - ncurses-based time-travel replay viewer
@@ -48,6 +49,7 @@ typedef struct {
     /* Display options */
     int           hex_mode;            /* 0 = ascii, 1 = hex dump */
     int           show_all_stages;     /* 0 = selected only, 1 = all */
+    int           diff_mode;           /* 0 = normal, 1 = diff view */
 
     /* Preloaded events for current view window */
     TraceEvent   *events;

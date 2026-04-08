@@ -11,72 +11,177 @@
 /* ---- Parsing ---- */
 
 /*
- * Split a command line on '|' into stages, then split each stage
- * into argv tokens.  Simple tokenizer: no quoting or escaping yet.
+ * State-machine tokenizer with shell quoting support.
+ *
+ * Handles:
+ *   'single quotes'  — literal content, no escaping inside
+ *   "double quotes"  — literal content, \" and \\ are interpreted
+ *   \x outside quotes — treats the next character literally
+ *
+ * Tokens are split on unquoted whitespace.
  */
-static int split_args(char *cmd, char **argv, int max_args)
+static int split_args(const char *cmd, char **argv, int max_args,
+                      char *outbuf, int outbuf_size)
 {
+    enum { NORMAL, SINGLE_Q, DOUBLE_Q } state = NORMAL;
     int argc = 0;
-    char *tok = strtok(cmd, " \t");
-    while (tok && argc < max_args - 1) {
-        argv[argc++] = tok;
-        tok = strtok(NULL, " \t");
+    int out  = 0;        /* position in outbuf */
+    int in_token = 0;
+
+    for (const char *p = cmd; *p != '\0'; p++) {
+        if (out >= outbuf_size - 1)
+            break;
+
+        switch (state) {
+        case NORMAL:
+            if (*p == '\'') {
+                state = SINGLE_Q;
+                if (!in_token) {
+                    if (argc >= max_args - 1) goto done;
+                    argv[argc] = &outbuf[out];
+                    in_token = 1;
+                }
+            } else if (*p == '"') {
+                state = DOUBLE_Q;
+                if (!in_token) {
+                    if (argc >= max_args - 1) goto done;
+                    argv[argc] = &outbuf[out];
+                    in_token = 1;
+                }
+            } else if (*p == '\\' && *(p + 1) != '\0') {
+                if (!in_token) {
+                    if (argc >= max_args - 1) goto done;
+                    argv[argc] = &outbuf[out];
+                    in_token = 1;
+                }
+                p++;
+                outbuf[out++] = *p;
+            } else if (*p == ' ' || *p == '\t') {
+                if (in_token) {
+                    outbuf[out++] = '\0';
+                    argc++;
+                    in_token = 0;
+                }
+            } else {
+                if (!in_token) {
+                    if (argc >= max_args - 1) goto done;
+                    argv[argc] = &outbuf[out];
+                    in_token = 1;
+                }
+                outbuf[out++] = *p;
+            }
+            break;
+
+        case SINGLE_Q:
+            if (*p == '\'') {
+                state = NORMAL;
+            } else {
+                outbuf[out++] = *p;
+            }
+            break;
+
+        case DOUBLE_Q:
+            if (*p == '"') {
+                state = NORMAL;
+            } else if (*p == '\\' && *(p + 1) != '\0' &&
+                       (*(p + 1) == '"' || *(p + 1) == '\\')) {
+                p++;
+                outbuf[out++] = *p;
+            } else {
+                outbuf[out++] = *p;
+            }
+            break;
+        }
     }
+
+done:
+    if (in_token) {
+        outbuf[out++] = '\0';
+        argc++;
+    }
+
     argv[argc] = NULL;
     return argc;
 }
 
+/*
+ * Split a command line on unquoted '|' characters into pipeline stages.
+ * Respects single quotes, double quotes, and backslash escapes.
+ */
 int pipeline_parse(const char *cmdline, Pipeline *pl)
 {
     memset(pl, 0, sizeof(*pl));
 
-    /* Work on a mutable copy */
-    char *buf = strdup(cmdline);
-    if (!buf)
-        return -1;
+    int len = (int)strlen(cmdline);
 
-    /* Split on pipe characters */
-    char *saveptr = NULL;
-    char *segment = strtok_r(buf, "|", &saveptr);
+    /* Find unquoted pipe characters to split into segments */
+    const char *seg_start = cmdline;
+    enum { NORM, SQ, DQ } state = NORM;
 
-    while (segment && pl->num_stages < MAX_STAGES) {
-        PipelineStage *s = &pl->stages[pl->num_stages];
+    for (int i = 0; i <= len; i++) {
+        char c = (i < len) ? cmdline[i] : '\0';
+        int is_pipe = 0;
 
-        /* Trim leading/trailing whitespace */
-        while (*segment == ' ' || *segment == '\t') segment++;
-        char *end = segment + strlen(segment) - 1;
-        while (end > segment && (*end == ' ' || *end == '\t')) *end-- = '\0';
-
-        if (*segment == '\0') {
-            free(buf);
-            return -1;  /* empty stage */
+        switch (state) {
+        case NORM:
+            if (c == '\'')      state = SQ;
+            else if (c == '"')  state = DQ;
+            else if (c == '\\' && i + 1 < len) { i++; continue; }
+            else if (c == '|' || c == '\0') is_pipe = 1;
+            break;
+        case SQ:
+            if (c == '\'') state = NORM;
+            break;
+        case DQ:
+            if (c == '"') state = NORM;
+            else if (c == '\\' && i + 1 < len) { i++; continue; }
+            break;
         }
 
-        strncpy(s->raw_cmd, segment, MAX_CMD_LEN - 1);
+        if (is_pipe && pl->num_stages < MAX_STAGES) {
+            /* Extract this segment */
+            int seg_len = (int)(&cmdline[i] - seg_start);
+            if (seg_len <= 0 && c == '|') {
+                return -1;  /* empty stage */
+            }
 
-        /* Split into argv */
-        char *argbuf = strdup(segment);
-        if (!argbuf) {
-            free(buf);
-            return -1;
+            PipelineStage *s = &pl->stages[pl->num_stages];
+
+            /* Copy segment for raw_cmd (trimmed) */
+            const char *ts = seg_start;
+            while (ts < &cmdline[i] && (*ts == ' ' || *ts == '\t')) ts++;
+            const char *te = &cmdline[i] - 1;
+            while (te > ts && (*te == ' ' || *te == '\t')) te--;
+
+            int trimmed_len = (int)(te - ts + 1);
+            if (trimmed_len <= 0) {
+                if (c == '|') return -1;  /* empty stage */
+                break;  /* trailing whitespace at end */
+            }
+            if (trimmed_len >= MAX_CMD_LEN)
+                trimmed_len = MAX_CMD_LEN - 1;
+            memcpy(s->raw_cmd, ts, (size_t)trimmed_len);
+            s->raw_cmd[trimmed_len] = '\0';
+
+            /* Parse into argv using the quoting-aware tokenizer */
+            char *argbuf = malloc(trimmed_len + 1);
+            if (!argbuf) return -1;
+            s->argc = split_args(s->raw_cmd, s->argv, MAX_ARGS,
+                                 argbuf, trimmed_len + 1);
+
+            if (s->argc == 0) {
+                free(argbuf);
+                return -1;
+            }
+
+            /* Note: argv pointers point into argbuf which we intentionally
+             * leak here (lives for program duration).  A production tool
+             * would manage this memory properly. */
+
+            pl->num_stages++;
+            seg_start = &cmdline[i + 1];
         }
-        s->argc = split_args(argbuf, s->argv, MAX_ARGS);
-
-        if (s->argc == 0) {
-            free(argbuf);
-            free(buf);
-            return -1;
-        }
-
-        /* Note: argv pointers point into argbuf which we intentionally
-         * leak here (lives for program duration).  A production tool
-         * would manage this memory properly. */
-
-        pl->num_stages++;
-        segment = strtok_r(NULL, "|", &saveptr);
     }
-
-    free(buf);
 
     if (pl->num_stages == 0)
         return -1;

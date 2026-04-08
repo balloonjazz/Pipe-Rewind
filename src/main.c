@@ -1,6 +1,7 @@
 #include "capture.h"
 #include "trace.h"
 #include "tui.h"
+#include "procstate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +46,7 @@ static const char *event_type_str(uint8_t t)
     case EVT_PROC_START: return "PROC_START";
     case EVT_PROC_EXIT:  return "PROC_EXIT";
     case EVT_PIPE_EOF:   return "PIPE_EOF";
+    case EVT_PROC_STATE: return "PROC_STATE";
     default:             return "UNKNOWN";
     }
 }
@@ -112,6 +114,9 @@ static int cmd_dump(const char *path)
             uint32_t code;
             memcpy(&code, payload_buf, 4);
             printf("  exit_code=%u", code);
+        } else if (evt.event_type == EVT_PROC_STATE && evt.payload_len >= 1) {
+            ProcState ps = (ProcState)payload_buf[0];
+            printf("  state=%s", proc_state_str(ps));
         }
 
         printf("\n");
