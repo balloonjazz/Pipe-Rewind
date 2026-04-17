@@ -1,134 +1,693 @@
 \documentclass[12pt,a4paper]{article}
+
+% ── Packages ─────────────────────────────────────────────────────────
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
 \usepackage{geometry}
 \geometry{margin=1in}
+\usepackage{graphicx}
+\usepackage{float}
 \usepackage{hyperref}
-\usepackage{listings}
 \usepackage{xcolor}
-\usepackage{titlesec}
-\usepackage{mdframed}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{tabularx}
+\usepackage{booktabs}
 \usepackage{caption}
+\usepackage{parskip}
 
-\definecolor{codegreen}{rgb}{0,0.6,0}
-\definecolor{codegray}{rgb}{0.5,0.5,0.5}
-\definecolor{codepurple}{rgb}{0.58,0,0.82}
-\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, calc, backgrounds}
 
-\lstdefinestyle{mystyle}{
-    backgroundcolor=\color{backcolour},   
-    commentstyle=\color{codegreen},
-    keywordstyle=\color{magenta},
-    numberstyle=\tiny\color{codegray},
-    stringstyle=\color{codepurple},
-    basicstyle=\ttfamily\footnotesize,
-    breakatwhitespace=false,         
-    breaklines=true,                 
-    captionpos=b,                    
-    keepspaces=true,                 
-    numbers=left,                    
-    numbersep=5pt,                  
-    showspaces=false,                
+% ── Colors ───────────────────────────────────────────────────────────
+\definecolor{prblue}{HTML}{2563EB}
+\definecolor{prteal}{HTML}{0D9488}
+\definecolor{prorange}{HTML}{EA580C}
+\definecolor{prgray}{HTML}{374151}
+\definecolor{prlightgray}{HTML}{F3F4F6}
+\definecolor{codebg}{HTML}{F8FAFC}
+\definecolor{codegreen}{HTML}{16A34A}
+
+% ── Code listing style ───────────────────────────────────────────────
+\lstdefinestyle{terminal}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{prgray!30},
+    xleftmargin=4pt,
+    xrightmargin=4pt,
+    aboveskip=8pt,
+    belowskip=8pt,
     showstringspaces=false,
-    showtabs=false,                  
-    tabsize=2
 }
-\lstset{style=mystyle}
+\lstset{style=terminal}
 
-\title{\textbf{PipeRewind}\\ \Large A Time-Travel Debugger for Shell Pipelines}
-\author{Luiz Takahashi \& Ehzoc Chavez}
-\date{\vspace{-5ex}}
+% ── Tip / Note boxes ────────────────────────────────────────────────
+\newtcolorbox{tipbox}[1][]{
+    colback=prteal!5, colframe=prteal!80!black,
+    fonttitle=\bfseries, title={#1},
+    arc=3pt, boxrule=0.8pt,
+    left=6pt, right=6pt, top=4pt, bottom=4pt
+}
+
+\newtcolorbox{notebox}[1][]{
+    colback=prblue!5, colframe=prblue!80!black,
+    fonttitle=\bfseries, title={#1},
+    arc=3pt, boxrule=0.8pt,
+    left=6pt, right=6pt, top=4pt, bottom=4pt
+}
+
+% ── Headers / hyperlinks ────────────────────────────────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=prblue,
+    urlcolor=prteal,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{prgray}{\small PipeRewind --- Project Explanation}}
+\fancyhead[R]{\textcolor{prgray}{\small Takahashi \& Chavez}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── Title ────────────────────────────────────────────────────────────
+\title{
+    \vspace{-1cm}
+    {\Huge\bfseries\textcolor{prblue}{PipeRewind}}\\[6pt]
+    {\Large A Time-Travel Debugger for Shell Pipelines}\\[12pt]
+    {\large\textcolor{prgray}{A Beginner-Friendly Project Explanation}}
+}
+\author{
+    \textbf{Luiz Takahashi} \quad \& \quad \textbf{Ehzoc Chavez}\\[2pt]
+    \small Washington State University --- Systems Programming
+}
+\date{\today}
 
 \begin{document}
 \maketitle
-\thispagestyle{empty}
+\thispagestyle{fancy}
 
-\begin{abstract}
-\noindent Shell pipelines are incredibly powerful but famously opaque. Identifying the root cause of a failure in a long chain of commands often requires cumbersome workarounds like injecting \texttt{tee} to inspect intermediate data. This document explores \textbf{PipeRewind}, a time-travel debugger written in C that solves this problem. PipeRewind transparently interposes data streams, monitors process states, logs everything sequentially, and provides both interactive scrubbing capabilities (replay) and real-time live-attachment features via an \texttt{ncurses} terminal user interface.
-\end{abstract}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section*{What You Will Learn}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-\vspace{2ex}
+By reading this document you will understand:
+
+\begin{itemize}[leftmargin=18pt]
+    \item What a shell pipeline is and why debugging one is hard.
+    \item What PipeRewind does and how it solves the problem.
+    \item How the code is organized (even if you have never read C before).
+    \item How to build and use PipeRewind in three simple commands.
+    \item Why each piece of the project matters from a systems-programming perspective.
+\end{itemize}
+
+\textit{Reading time: about 10 minutes.}
+
 \tableofcontents
 \newpage
 
-\section{What PipeRewind Really Is}
-PipeRewind is an extremely precise debugging framework specifically designed to observe, capture, and visualize the execution of standard UNIX shell pipelines. 
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{The Problem: Pipelines Are a Black Box}
+\label{sec:problem}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-When a user strings together a command sequence such as \texttt{cmd A | cmd B | cmd C}, PipeRewind sits silently between the interconnected \texttt{stdout} and \texttt{stdin} file descriptors of each process. It intercepts every byte of data passing through the system, measures the exact time standard events occur (like process creation, sleeping, and dying), and records these transactions into a proprietary binary \texttt{.prt} (PipeRewind Trace) trace file. Waitings, blockages, and textual outputs are indexed seamlessly. 
+\subsection{What is a shell pipeline?}
 
-Finally, a dedicated graphical \texttt{ncurses} application enables engineers to playback, scrub back-and-forth in time, and view comparative differences in the transmitted data payload. 
+In Linux, you can chain programs together with the pipe character
+(\texttt{|}). The output of one program automatically becomes the input
+of the next:
 
-\section{Why It Matters}
-The standard philosophy of Unix operates on text streams running linearly between disparate utility binaries. While this flexibility allows amazing combinations, it introduces catastrophic opacity. When a pipeline fails (e.g., outputs zero lines, or crashes), tracing \emph{where} exactly the failure originated is notoriously difficult. Was \texttt{cmd A} producing malformed inputs, or did \texttt{cmd B} incorrectly parse them?
+\begin{lstlisting}[language=bash]
+cat access.log | grep ERROR | sort | uniq -c
+\end{lstlisting}
 
-\textbf{Traditional Solutions Fall Short:}
-\begin{itemize}
-    \item \textbf{\texttt{strace}:} Too low-level and noisy; sifting through thousands of system calls across multiple heavily forked processes is mentally exhausting.
-    \item \textbf{\texttt{tee}:} Manually restructuring the command strings with \texttt{tee ./dump1.txt | cmd B | tee ./dump2.txt} litters the filesystem, requires modifying the source scripts, and loses timing information entirely.
-\end{itemize}
+This single line runs \emph{four} programs at the same time:
 
-PipeRewind solves this. Instead of retrofitting debuggers or modifying scripts, you inject \texttt{piperewind.c} exactly once and immediately get an immutable history map of not just the variables, but the actual textual data passed along dynamically. 
-
-\section{Core Capabilities}
-PipeRewind elevates typical shell monitoring. The major capabilities incorporated include:
-\begin{enumerate}
-    \item \textbf{Transparent High-Speed Interception:} Using Linux \texttt{epoll()} capabilities to monitor descriptors asynchronously, recording throughput efficiently with unnoticeable CPU overhead.
-    \item \textbf{Process State Polling:} Tracking \texttt{/proc/[pid]/status} in the background to discern if a process is \texttt{RUNNING}, \texttt{BLOCKED}, or \texttt{EXITED}.
-    \item \textbf{Side-by-Side Diff Panel:} Comparing \texttt{DATA\_OUT} from Stage N against \texttt{DATA\_IN} to Stage N+1, visualizing exactly what payload transitioned downstream via a Longest-Common-Subsequence algorithm.
-    \item \textbf{Windowed Trace Loading:} Processing massive pipeline topologies by implementing a smart memory sliding-window mechanism over trace logs—providing fast scrubbing capabilities without OOM (out-of-memory) crashes.
-    \item \textbf{Live-Attach Mode:} Spawning the terminal UI interface immediately while executing the pipeline concurrently, trailing process data as it enters dynamically using synchronized daemon threading.
+\begin{enumerate}[leftmargin=18pt]
+    \item \textbf{cat} reads a log file and prints every line.
+    \item \textbf{grep} keeps only lines containing ``ERROR''.
+    \item \textbf{sort} alphabetizes those lines.
+    \item \textbf{uniq -c} counts how many times each line appears.
 \end{enumerate}
 
-\section{Code Structure and Architecture}
-The project relies exclusively on C99, structured systematically around UNIX system methodologies:
+Data flows left to right through invisible connections called
+\emph{pipes}. Each pipe is a one-way tunnel managed by the operating
+system.
 
-\begin{itemize}
-    \item \textbf{\texttt{src/pipeline.c}:} A state-machine parser. Rather than naive string-splitting, it interprets UNIX shell tokens natively (processing single/double escaping constraints perfectly) before executing commands.
-    \item \textbf{\texttt{src/capture.c}:} The interception engine. Invokes processes, handles anonymous \texttt{dup2()} pipe bridging, and reacts asynchronously to buffer dispatches via \texttt{epoll}.
-    \item \textbf{\texttt{src/procstate.c}:} Context-aware telemetry module reading localized Kernel \texttt{/proc} values inside tight feedback loops to identify schedule blocking anomalies.
-    \item \textbf{\texttt{src/trace.c}:} Handles writing and reading data onto disk format. Encapsulates dynamic index capacity expansion so queries like ``give me data belonging to stage N at timestamp T'' map directly to disk payload jumps natively.
-    \item \textbf{\texttt{src/tui.c} \& \texttt{src/diff.c}:} The graphical component. Computes window timelines, renders events sequentially over visual buffers, manages asynchronous pthreads binding `Live` pipelines to updates, and dynamically LCS diffs consecutive payload fragments.
+\subsection{Why is debugging hard?}
+
+Imagine the command above prints nothing. Where is the bug?
+
+\begin{itemize}[leftmargin=18pt]
+    \item Maybe \texttt{cat} could not find the file.
+    \item Maybe \texttt{grep} filtered out everything.
+    \item Maybe the data reached \texttt{sort} but not \texttt{uniq}.
 \end{itemize}
 
-\section{How to Use PipeRewind}
-Using PipeRewind follows intuitive syntax mimicking standard Unix command-line execution interfaces.
+You cannot see what flows between programs because the data travels
+through the kernel, invisible to the user. This is the core problem
+PipeRewind solves.
 
-\subsection{Compilation}
-The project incorporates a basic Makefile. Ensure you have GCC and \texttt{libncurses-dev} dependencies satisfied natively. 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{images/pipeline_problem.png}
+    \caption{The data moving between commands is invisible --- you only see the final output.}
+    \label{fig:problem}
+\end{figure}
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{The Solution: PipeRewind}
+\label{sec:solution}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PipeRewind is a tool written in C that sits between every pair of
+commands in a pipeline. Think of it like a security camera for your
+data: it records every piece of text that passes through, stamps it
+with the exact time, and saves everything to a file. Later, you can
+``rewind'' and replay the entire execution, stepping through it one
+event at a time --- just like scrubbing through a video.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{images/piperewind_solution.png}
+    \caption{PipeRewind makes everything visible by recording the data between each command.}
+    \label{fig:solution}
+\end{figure}
+
+\begin{notebox}[Key Idea]
+PipeRewind is \textbf{transparent}. It does not change how your
+pipeline works. The exact same output appears on your screen --- but
+now a complete recording is saved on disk for later inspection.
+\end{notebox}
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{What Can PipeRewind Do?}
+\label{sec:features}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{images/workflow_diagram.png}
+    \caption{The three-step workflow: Record, Replay, and Diff.}
+    \label{fig:workflow}
+\end{figure}
+
+Here is everything PipeRewind provides at a glance:
+
+\renewcommand{\arraystretch}{1.4}
+\begin{table}[H]
+\centering
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{Feature} & \textbf{What it does (in plain English)} \\
+\midrule
+Record a pipeline &
+    Runs your command normally, but silently saves every byte that
+    flows between stages into a \texttt{.prt} trace file. \\
+Replay (TUI) &
+    Opens a full-screen terminal viewer where you can step forward and
+    backward through every event, like scrubbing a YouTube video. \\
+Live mode &
+    Shows the viewer \emph{while} the pipeline is still running, so
+    you can watch data arrive in real time. \\
+Side-by-side diff &
+    Compares what one stage \emph{sent} with what the next stage
+    \emph{received}, highlighting any differences. \\
+Process state tracking &
+    Monitors whether each program is running, sleeping, or finished,
+    so you can spot bottlenecks. \\
+Quoted-argument support &
+    Correctly handles tricky commands like
+    \texttt{grep 'hello world'} without breaking on spaces. \\
+Large-trace support &
+    Uses a smart sliding window so huge recordings (100,000+ events)
+    do not use up all your memory. \\
+\bottomrule
+\end{tabularx}
+\caption{PipeRewind feature summary.}
+\end{table}
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{How to Use It (Step by Step)}
+\label{sec:usage}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+\subsection{Step 0: Build}
+
+You need a Linux machine with GCC and the ncurses library installed.
+Then just type:
+
 \begin{lstlisting}[language=bash]
-# Simply compile all modules locally
 make clean && make
 \end{lstlisting}
 
-\subsection{Execution Modes}
-PipeRewind allows multi-stage operation.
-\begin{itemize}
-    \item \textbf{\texttt{record}:} Creates a headless capturing session and outputs data directly onto the disk (defaults to \texttt{trace.prt}).
+This compiles all seven source files and produces a single executable
+called \texttt{piperewind}.
+
+\subsection{Step 1: Record a pipeline}
+
 \begin{lstlisting}[language=bash]
-./piperewind record "cat /var/log/syslog | grep error | sort"
+./piperewind record "echo -e 'banana\napple\ncherry' | sort | head -2"
 \end{lstlisting}
-    
-    \item \textbf{\texttt{replay}:} Summons the visual graphical UI (TUI) overlay rendering pipeline data streams out over time natively.
+
+You will see the normal output (\texttt{apple} and \texttt{banana}) on
+your screen, and a file called \texttt{trace.prt} is created silently
+in the background.
+
+\begin{tipbox}[Tip]
+Use \texttt{-v} to see progress messages, or \texttt{-o my\_trace.prt}
+to choose a different file name.
+\end{tipbox}
+
+\subsection{Step 2: Inspect the recording}
+
+The simplest way to look at a trace is the \texttt{dump} command, which
+prints a plain-text timeline:
+
+\begin{lstlisting}[language=bash]
+./piperewind dump trace.prt
+\end{lstlisting}
+
+Example output (abbreviated):
+
+\begin{lstlisting}
+[  0.07 ms] stage 0  PROC_START
+[  1.38 ms] stage 0  DATA_OUT  20 bytes  "banana\napple\ncherry\n"
+[  1.61 ms] stage 1  DATA_IN   20 bytes  "banana\napple\ncherry\n"
+[  2.44 ms] stage 1  DATA_OUT  20 bytes  "apple\nbanana\ncherry\n"
+[  2.58 ms] stage 2  DATA_OUT  13 bytes  "apple\nbanana\n"
+[  2.80 ms] stage 2  PROC_EXIT exit_code=0
+\end{lstlisting}
+
+Reading this from top to bottom tells you the complete story: Stage~0
+produced the unsorted fruit list, Stage~1 (sort) received it and output
+the sorted version, and Stage~2 (head) kept only the first two lines.
+
+\subsection{Step 3: Open the visual replay viewer}
+
+For a richer experience, open the interactive TUI:
+
 \begin{lstlisting}[language=bash]
 ./piperewind replay trace.prt
 \end{lstlisting}
-    
-    \item \textbf{\texttt{live}:} Instantiates real-time debugging. The capture engine spins up as an isolated thread in the background, drawing timeline updates transparently back into the TUI frame utilizing follow/auto-scroll heuristics.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{images/tui_mockup.png}
+    \caption{The replay viewer: a full-screen terminal interface where you
+             scrub through time, select stages, and inspect data.}
+    \label{fig:tui}
+\end{figure}
+
+\subsubsection*{Keyboard controls inside the viewer}
+
+\renewcommand{\arraystretch}{1.3}
+\begin{table}[H]
+\centering
+\begin{tabular}{c l}
+\toprule
+\textbf{Key} & \textbf{Action} \\
+\midrule
+\texttt{j} / \texttt{k} & Step one event forward / backward \\
+\texttt{J} / \texttt{K} & Jump ten events forward / backward \\
+\texttt{$\uparrow$} / \texttt{$\downarrow$} & Select a different pipeline stage \\
+\texttt{d} & Toggle the side-by-side diff view \\
+\texttt{f} & Toggle follow mode (auto-scroll to newest event) \\
+\texttt{h} & Switch between text view and hex-dump view \\
+\texttt{Home} / \texttt{End} & Jump to the first / last event \\
+\texttt{?} & Show the help overlay \\
+\texttt{q} & Quit \\
+\bottomrule
+\end{tabular}
+\caption{TUI keyboard shortcuts.}
+\end{table}
+
+\subsection{Step 4 (optional): Watch a pipeline live}
+
+Instead of recording first and replaying later, you can do both at the
+same time:
+
 \begin{lstlisting}[language=bash]
-./piperewind live "tail -f /var/log/nginx/access.log | jq ."
+./piperewind live "tail -f /var/log/syslog | grep error"
 \end{lstlisting}
+
+The viewer opens immediately, and events appear as the pipeline
+produces them. Press \texttt{f} to toggle auto-scrolling.
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{How the Code Is Organized}
+\label{sec:code}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The project has about 2{,}500 lines of C spread across seven source
+files. Each file has one clear job. The diagram below shows how they
+connect:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.9cm and 1.6cm,
+    box/.style={
+        draw=prblue!70, fill=prblue!8, rounded corners=4pt,
+        minimum height=1.1cm, minimum width=3.4cm,
+        text=prgray, font=\small\bfseries, align=center
+    },
+    io/.style={
+        draw=prteal!70, fill=prteal!8, rounded corners=4pt,
+        minimum height=0.9cm, minimum width=2.6cm,
+        text=prgray, font=\small, align=center
+    },
+    arr/.style={-{Stealth[length=5pt]}, thick, prgray},
+    label/.style={font=\scriptsize\itshape, text=prgray}
+]
+    % Row 1
+    \node[box] (main) {main.c\\[-2pt]{\scriptsize CLI entry point}};
+    
+    % Row 2
+    \node[box, below left=1.2cm and 0.2cm of main] (pipeline) {pipeline.c\\[-2pt]{\scriptsize Parse commands}};
+    \node[box, below right=1.2cm and 0.2cm of main] (tui) {tui.c\\[-2pt]{\scriptsize Interactive viewer}};
+    
+    % Row 3
+    \node[box, below=1.2cm of pipeline] (capture) {capture.c\\[-2pt]{\scriptsize Run and record}};
+    \node[box, below=1.2cm of tui] (diff) {diff.c\\[-2pt]{\scriptsize Compare outputs}};
+    
+    % Row 4
+    \node[box, below right=1.2cm and -0.2cm of capture] (trace) {trace.c\\[-2pt]{\scriptsize Read/write files}};
+    
+    % Supporting
+    \node[box, left=1.2cm of capture] (procstate) {procstate.c\\[-2pt]{\scriptsize Monitor processes}};
+    
+    % I/O
+    \node[io, below=0.8cm of trace] (prt) {trace.prt\\[-2pt]{\scriptsize Binary trace file}};
+    
+    % Arrows
+    \draw[arr] (main) -- (pipeline);
+    \draw[arr] (main) -- (tui);
+    \draw[arr] (pipeline) -- (capture);
+    \draw[arr] (capture) -- (trace);
+    \draw[arr] (tui) -- (trace);
+    \draw[arr] (tui) -- (diff);
+    \draw[arr] (procstate) -- (capture);
+    \draw[arr] (trace) -- (prt);
+\end{tikzpicture}
+\caption{How the source files connect. Arrows mean ``uses.''}
+\label{fig:architecture}
+\end{figure}
+
+Let's walk through each file:
+
+\subsection{main.c --- The front door}
+
+This is where the program starts. It reads what you typed on the
+command line (\texttt{record}, \texttt{replay}, \texttt{live}, or
+\texttt{dump}) and calls the right function. Think of it as a
+receptionist that directs you to the right office.
+
+\subsection{pipeline.c --- Understanding your command}
+
+When you write \texttt{"echo hello | sort"}, this file splits that
+string into separate commands. It is smart enough to handle tricky
+cases like single quotes (\texttt{'hello world'}), double quotes, and
+backslash escapes. Under the hood it uses a \emph{state machine} ---
+a pattern where the code keeps track of whether it is currently inside
+quotes or not, and adjusts its behavior accordingly.
+
+\subsection{capture.c --- The recording engine}
+
+This is the heart of PipeRewind. When you run \texttt{record}, this
+file:
+
+\begin{enumerate}[leftmargin=18pt]
+    \item Creates child processes (one per command) using \texttt{fork}
+          and \texttt{exec}.
+    \item Connects them with pipes, but inserts itself in the middle
+          of each pipe so it can see the data.
+    \item Uses Linux's \texttt{epoll} system to efficiently wait for
+          data from \emph{any} of the pipes without busy-waiting.
+    \item Every time data arrives, it forwards the bytes to the next
+          command and simultaneously writes a timestamped record to
+          the trace file.
+\end{enumerate}
+
+The result is completely transparent: the pipeline behaves exactly the
+same as if PipeRewind were not there.
+
+\subsection{trace.c --- The filing cabinet}
+
+This file handles reading and writing the binary trace file
+(\texttt{.prt}). It stores a compact header describing the pipeline,
+followed by a stream of events, followed by an index table for fast
+lookups. Like a book's table of contents, the index lets the viewer
+jump to any point in time without reading everything before it.
+
+It also supports \emph{live refresh}: while the capture engine is
+still writing new events, the reader can detect and load them
+dynamically.
+
+\subsection{tui.c --- The visual viewer}
+
+The largest file in the project. It uses the \texttt{ncurses} library
+to draw a full-screen terminal interface with:
+
+\begin{itemize}[leftmargin=18pt]
+    \item A header bar showing the file name and event count.
+    \item A timeline showing how far through the recording you are.
+    \item A list of pipeline stages with color-coded status (green for
+          running, red for exited, yellow for blocked).
+    \item A data panel showing the actual bytes that flowed at the
+          selected moment in time.
 \end{itemize}
 
-\subsection{TUI Hotkeys}
-While inside the \texttt{ncurses} view:
-\begin{itemize}
-    \item \textbf{Up/Down Arrows:} Shift selection highlight across interacting stages.
-    \item \textbf{j / k:} Frame-step timeline indexes forward or backwards in time.
-    \item \textbf{J / K:} Fast scrubbing (10 index gaps).
-    \item \textbf{d:} Toggles the Side-by-Side Diff interface analyzing data modifications between parallel downstream buffers directly.
-    \item \textbf{f:} Toggles timeline ``Follow Mode'' binding navigation automatically to late-joining live daemon updates.
-    \item \textbf{q:} Exit the trace interface confidently.
+It loads events through a \emph{sliding window}: instead of putting
+the entire trace into memory, it keeps only a chunk of about 20{,}000
+events around your current position, loading more as you scroll.
+
+\subsection{diff.c --- Spot the difference}
+
+When you press \texttt{d} in the viewer, this file compares the output
+of one stage with the input of the next stage, line by line. It uses
+a well-known algorithm called \emph{Longest Common Subsequence} (LCS)
+to find which lines were added, removed, or changed --- the same idea
+used by \texttt{git diff}.
+
+\subsection{procstate.c --- Health monitor}
+
+This tiny file reads each process's status from the Linux
+\texttt{/proc} filesystem (the kernel's real-time status board). It
+reports whether a process is Running, Sleeping, or Blocked, which
+helps you find bottlenecks.
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{How Data Flows Through PipeRewind}
+\label{sec:dataflow}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The following diagram shows what happens when you record a two-command
+pipeline like \texttt{echo hello | cat}:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.7cm and 0.5cm,
+    proc/.style={draw=prblue!70, fill=prblue!10, rounded corners=3pt,
+                 minimum width=2.2cm, minimum height=0.9cm,
+                 font=\small\bfseries, text=prgray},
+    eng/.style={draw=prorange!70, fill=prorange!8, rounded corners=3pt,
+                minimum width=3.6cm, minimum height=0.9cm,
+                font=\small\bfseries, text=prgray},
+    file/.style={draw=prteal!70, fill=prteal!8, rounded corners=3pt,
+                 minimum width=2.4cm, minimum height=0.9cm,
+                 font=\small, text=prgray},
+    arr/.style={-{Stealth[length=5pt]}, thick},
+    lbl/.style={font=\scriptsize, text=prgray, fill=white, inner sep=1pt}
+]
+
+    \node[proc] (echo) {echo hello};
+    \node[eng, right=2.5cm of echo] (engine) {Capture Engine};
+    \node[proc, right=2.5cm of engine] (cat) {cat};
+    \node[file, below=1.5cm of engine] (trace) {trace.prt};
+
+    \draw[arr, prblue] (echo) -- node[lbl, above] {\texttt{stdout}} (engine);
+    \draw[arr, prblue] (engine) -- node[lbl, above] {\texttt{stdin}} (cat);
+    \draw[arr, prorange] (engine) -- node[lbl, right] {write events} (trace);
+
+    \draw[arr, prteal, dashed] (cat.south) .. controls +(0,-1) and +(2,-1) ..
+        node[lbl, below] {final output to screen} +(3,0);
+\end{tikzpicture}
+\caption{Data flows from \texttt{echo} through the capture engine
+         to \texttt{cat}. The engine saves a copy to disk.}
+\label{fig:dataflow}
+\end{figure}
+
+When data arrives from \texttt{echo}:
+
+\begin{enumerate}[leftmargin=18pt]
+    \item The engine writes a \textbf{DATA\_OUT} event (``Stage~0
+          produced these bytes'').
+    \item It writes a \textbf{DATA\_IN} event (``Stage~1 received
+          these bytes'').
+    \item It forwards the bytes to \texttt{cat}'s standard input.
+\end{enumerate}
+
+This three-step process repeats for every chunk of data, on every
+pipe, creating a complete timeline of the pipeline's life.
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{The Trace File Format}
+\label{sec:trace}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The \texttt{.prt} file is a custom binary format designed for fast
+random access. Here is how it is laid out:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    block/.style={draw=prgray!50, fill=#1, minimum width=8cm,
+                  minimum height=1cm, font=\small, text=prgray,
+                  rounded corners=2pt},
+    arr/.style={-{Stealth[length=4pt]}, prgray, thick}
+]
+    \node[block=prblue!10] (hdr) at (0,0) {File Header (magic number, version, stage count)};
+    \node[block=prteal!10, below=2pt of hdr] (stg) {Stage Headers (command name, PID for each stage)};
+    \node[block=prorange!10, below=2pt of stg, minimum height=2cm] (evt) {Events (timestamp + type + data, repeated)};
+    \node[block=prgray!10, below=2pt of evt] (idx) {Index Table (timestamp + file position for each event)};
+
+    \draw[decorate, decoration={brace, amplitude=6pt, mirror}, prgray]
+        ($(hdr.north west)+(-0.3,0.1)$) -- ($(idx.south west)+(-0.3,-0.1)$)
+        node[midway, left=10pt, font=\small, text=prgray, align=right] {One\\[2pt]\texttt{.prt}\\[2pt]file};
+\end{tikzpicture}
+\caption{Structure of a \texttt{.prt} trace file.}
+\label{fig:traceformat}
+\end{figure}
+
+The six event types recorded are:
+
+\begin{itemize}[leftmargin=18pt]
+    \item \textbf{PROC\_START} --- a process began running.
+    \item \textbf{PROC\_EXIT} --- a process finished (includes exit code).
+    \item \textbf{DATA\_OUT} --- a stage wrote data to its output pipe.
+    \item \textbf{DATA\_IN} --- a stage received data on its input pipe.
+    \item \textbf{PIPE\_EOF} --- a pipe was closed (end of data).
+    \item \textbf{PROC\_STATE} --- a snapshot of whether the process is running, sleeping, or blocked.
 \end{itemize}
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{Systems Programming Concepts Used}
+\label{sec:concepts}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PipeRewind is a showcase of key systems programming ideas. Here is how
+each concept appears in the code:
+
+\renewcommand{\arraystretch}{1.4}
+\begin{table}[H]
+\centering
+\begin{tabularx}{\textwidth}{l X}
+\toprule
+\textbf{Concept} & \textbf{Where and how it is used} \\
+\midrule
+\texttt{fork / exec} &
+    The capture engine creates a child process for each pipeline
+    command with \texttt{fork()}, then replaces it with the real
+    program using \texttt{execvp()}. \\
+Pipes and \texttt{dup2} &
+    Anonymous pipes connect every pair of stages. \texttt{dup2()}
+    redirects each child's \texttt{stdin}/\texttt{stdout} to the
+    correct pipe end. \\
+\texttt{epoll} event loop &
+    Instead of checking each pipe one by one (\textit{polling}), the
+    engine asks the kernel to wake it up whenever \emph{any} pipe has
+    data ready, making it very efficient. \\
+\texttt{/proc} filesystem &
+    The \texttt{/proc/[pid]/status} file is read periodically to
+    check if a process is running, sleeping, or blocked. \\
+Threading (\texttt{pthreads}) &
+    In live mode, the capture engine runs on a background thread while
+    the TUI runs on the main thread, sharing the trace file safely. \\
+Binary file I/O &
+    The trace writer uses \texttt{fwrite()} for raw binary output, and
+    the reader uses \texttt{fseek()} and \texttt{fread()} for random
+    access jumps --- much faster than a text format for large files. \\
+\bottomrule
+\end{tabularx}
+\caption{Systems programming concepts in PipeRewind.}
+\end{table}
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{Project File Map}
+\label{sec:filemap}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+\begin{lstlisting}
+piperewind/
+  Makefile              Build instructions (type "make" to compile)
+  README.md             Quick-start guide
+  include/
+    capture.h           Capture engine interface
+    diff.h              Diff algorithm interface
+    pipeline.h          Pipeline parser interface
+    procstate.h         Process state monitor interface
+    trace.h             Trace file format and reader/writer interface
+    tui.h               Terminal viewer interface
+  src/
+    main.c              CLI entry point (record, replay, live, dump)
+    pipeline.c          Command-line parser with quoting support
+    capture.c           epoll-based capture engine
+    trace.c             Binary trace file reader and writer
+    tui.c               ncurses interactive replay viewer
+    diff.c              Line-based LCS diff algorithm
+    procstate.c         /proc-based process state polling
+\end{lstlisting}
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{Quick Reference Card}
+\label{sec:quickref}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+\begin{tipbox}[Build and test]
+\begin{lstlisting}[language=bash]
+make              # compile
+make test         # run automated smoke tests
+make clean        # delete build files
+\end{lstlisting}
+\end{tipbox}
+
+\begin{tipbox}[Record, inspect, and replay]
+\begin{lstlisting}[language=bash]
+./piperewind record "cmd1 | cmd2 | cmd3"   # save trace
+./piperewind dump trace.prt                # text summary
+./piperewind replay trace.prt              # visual viewer
+./piperewind live "cmd1 | cmd2"            # record + view
+\end{lstlisting}
+\end{tipbox}
+
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+\section{Conclusion}
+\label{sec:conclusion}
+% ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PipeRewind turns an invisible, one-shot pipeline execution into a
+recorded, rewindable experience. Instead of guessing where data was
+lost or mangled, you can step through every event, compare outputs
+side by side, and watch process states in real time.
+
+The project demonstrates core systems programming skills ---
+process creation, pipes, event-driven I/O, threading, and binary
+file formats --- all combined into a practical, usable debugging tool.
+
+\vfill
+
+\begin{center}
+\textcolor{prgray}{\small
+    Repository:
+    \url{https://github.com/balloonjazz/Pipe-Rewind}
+}
+\end{center}
 
 \end{document}
