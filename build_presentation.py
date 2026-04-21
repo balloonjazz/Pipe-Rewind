@@ -139,7 +139,7 @@ add_text(sl, Inches(0.8), Inches(2.9), Inches(11.5), Inches(0.8),
 accent_line(sl, Inches(3.8))
 # Authors
 add_text(sl, Inches(0.8), Inches(4.1), Inches(11.5), Inches(0.6),
-         "Luiz Takahashi  &  Ehzoc Chavez",
+         "Luiz Takahashi, Ehzoc Chavez, & Jesse Perez",
          font_size=20, color=LGRAY, alignment=PP_ALIGN.LEFT)
 add_text(sl, Inches(0.8), Inches(4.65), Inches(11.5), Inches(0.5),
          "Washington State University  •  Systems Programming  •  Spring 2026",
@@ -793,7 +793,7 @@ add_text(sl, Inches(0.8), Inches(2.2), Inches(11.5), Inches(1.2),
          "Thank You", font_size=52, color=WHITE, bold=True,
          alignment=PP_ALIGN.LEFT)
 add_text(sl, Inches(0.8), Inches(4.3), Inches(11.5), Inches(0.6),
-         "Luiz Takahashi  &  Ehzoc Chavez",
+         "Luiz Takahashi, Ehzoc Chavez, & Jesse Perez",
          font_size=22, color=LGRAY, alignment=PP_ALIGN.LEFT)
 add_text(sl, Inches(0.8), Inches(4.9), Inches(11.5), Inches(0.5),
          "github.com/balloonjazz/Pipe-Rewind",
