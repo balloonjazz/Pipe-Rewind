@@ -76,6 +76,8 @@ This is fully transparent — the pipeline produces the same output it would wit
 
 Binary format with a fixed header, per-stage metadata, a stream of variable-length events, and an index table at the end for random access. See `include/trace.h` for the full specification.
 
+In the live demo you will see the back and forth scrubbing of the timeline.
+
 ## Course Themes
 
 | Theme | How it's used |
@@ -89,6 +91,7 @@ Binary format with a fixed header, per-stage metadata, a stream of variable-leng
 
 - Luiz Takahashi (GitHub: LTTakahashi)
 - Ehzoc Chavez (GitHub: balloonjazz)
+- Fellow (Github: samzeas)
 
 ## License
 
