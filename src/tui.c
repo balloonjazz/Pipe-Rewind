@@ -645,15 +645,15 @@ int tui_run(const char *trace_path)
         return 1;
     }
 
-    /* Start at event 0 */
-    tui_goto_event(&ts, 0);
-
     ts.stage_states = calloc(ts.reader.header.num_stages, 1);
     ts.exit_codes   = calloc(ts.reader.header.num_stages, sizeof(int));
     if (!ts.stage_states || !ts.exit_codes) {
         trace_reader_close(&ts.reader);
         return 1;
     }
+
+    /* Start at event 0 */
+    tui_goto_event(&ts, 0);
 
     /* Initialize ncurses */
     initscr();
@@ -852,6 +852,14 @@ int tui_run_live(const char *trace_path, const char *pipeline_cmd)
 
     if (!ts.reader.fp) {
         fprintf(stderr, "Error: failed to open trace reader for live file\n");
+        pthread_join(thread, NULL);
+        return -1;
+    }
+
+    ts.stage_states = calloc(ts.reader.header.num_stages, 1);
+    ts.exit_codes   = calloc(ts.reader.header.num_stages, sizeof(int));
+    if (!ts.stage_states || !ts.exit_codes) {
+        trace_reader_close(&ts.reader);
         pthread_join(thread, NULL);
         return -1;
     }
