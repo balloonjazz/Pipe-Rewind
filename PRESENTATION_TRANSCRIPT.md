@@ -206,28 +206,47 @@
 
 ### Slide 21 — Live Demo
 
-> **Ehzoc:** And now let's show it running live.
+> **Ehzoc:** And now let's show it running live. We'll start from a clean build.
 
-*(Open terminal. Run the following)*
+*(Switch display to a full-screen terminal)*
 
+**Step 1: Build the Project**
 ```bash
-# 1. Build
 make clean && make
-
-# 2. Record
-./piperewind record -v "echo -e 'banana\napple\ncherry' | sort | head -2"
-
-# 3. Dump
-./piperewind dump trace.prt
-
-# 4. Replay (navigate with j/k, press d for diff, q to quit)
-./piperewind replay trace.prt
-
-# 5. Live mode (if time permits)
-./piperewind live "for i in $(seq 1 20); do echo line_$i; sleep 0.2; done | sort"
 ```
+> **Ehzoc:** As you can see, the build is fast. Seven source files compile into a single `piperewind` executable.
 
-*(~2–4 minutes for demo, adjust based on remaining time)*
+**Step 2: Record a simple pipeline**
+```bash
+./piperewind record -v "echo -e 'banana\napple\ncherry' | sort | head -2"
+```
+> **Ehzoc:** We pass the pipeline as a single string. The `-v` flag means verbose, so we see PipeRewind parsing it into 3 distinct stages. The pipeline executes perfectly, and the final output appears exactly as it would normally.
+
+**Step 3: Dump the chronological trace**
+```bash
+./piperewind dump trace.prt
+```
+> **Ehzoc:** Now we dump the binary trace. Here you can see the deterministic timeline. `echo` started, `sort` started... then `echo` wrote 20 bytes of fruit names, which `sort` read. `sort` then wrote the alphabetized list to `head`. It perfectly reconstructs the data flow.
+
+**Step 4: Interactive TUI Replay**
+```bash
+./piperewind replay trace.prt
+```
+> **Ehzoc:** But a text dump isn't interactive. Let's launch the TUI.
+> *(Inside TUI)*: As I press `j` and `k`, we scrub back and forth through time. Notice the timeline progress bar moving.
+> Notice the color codes: when `sort` is running, it's green. When it finishes, it turns red indicating it exited cleanly.
+> *(Inside TUI)*: Now, I'll press `d` to open the Side-by-Side Diff. Look at the data panel: you can visibly see `apple` and `banana` being rearranged from the unsorted output into the sorted input.
+> *(Press 'q' to quit)*
+
+**Step 5: Live-Attach Mode**
+> **Ehzoc:** Finally, let's trace a pipeline while it's actively running. We'll use a bash script to generate slow, streaming data — outputting one item every half second into `sort`.
+```bash
+./piperewind live "bash -c 'for i in 1 2 3 4 5; do echo item_\$i; sleep 0.5; done' | sort -r"
+```
+> **Ehzoc:** *(Inside TUI)*: I'll press `f` to enable Follow Mode. As the bash script generates data in real-time, our background thread captures it, and the interface automatically ticks forward.
+> Here's the best part: look closely at the `sort` process. It is sitting in the SLEEPING state (yellow). `piperewind` knows it's blocked, waiting for the EOF from bash before it can reverse-sort the data!
+
+*(~3–4 minutes for demo, pace carefully to let the audience absorb the visuals)*
 
 ---
 
