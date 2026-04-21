@@ -6,13 +6,11 @@
 /*
  * The capture engine ties together the pipeline execution and the
  * trace writer.  It runs an epoll-based event loop that:
- *
  *   1. Monitors all interposed pipe file descriptors
  *   2. Reads data as it flows between stages
  *   3. Forwards data to the next stage (transparent interposition)
  *   4. Records every byte with timestamps into the trace file
  *   5. Tracks process state transitions
- *
  * The engine runs until all pipeline stages have exited and all
  * pipes have been drained.
  */
@@ -36,7 +34,6 @@ int capture_init(CaptureEngine *ce, const char *cmdline,
  * Run the capture engine.
  * This spawns the pipeline, enters the epoll event loop,
  * records all data, and returns when the pipeline completes.
- *
  * Returns 0 on success, -1 on error.
  */
 int capture_run(CaptureEngine *ce);
