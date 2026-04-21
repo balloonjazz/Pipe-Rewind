@@ -1,5 +1,4 @@
-#ifndef PIPEREWIND_CAPTURE_H
-#define PIPEREWIND_CAPTURE_H
+#define CAPTURE_H
 
 #include "pipeline.h"
 #include "trace.h"
@@ -47,4 +46,4 @@ int capture_run(CaptureEngine *ce);
  */
 void capture_destroy(CaptureEngine *ce);
 
-#endif /* PIPEREWIND_CAPTURE_H */
+
