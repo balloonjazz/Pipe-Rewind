@@ -12,20 +12,20 @@
  *   ┌─────────────────────────────────────────────────────────┐
  *   │ PipeRewind: trace.prt                    [q]uit [?]help │
  *   ├─────────────────────────────────────────────────────────┤
- *   │ Timeline: ████████░░░░░░░░░░░░░░░░░░░  3.21 / 10.56 ms│
+ *   │ Timeline: ████████░░░░░░░░░░░░░░░░░░░  3.21 / 10.56 ms  │
  *   ├─────────────────────────────────────────────────────────┤
- *   │ > Stage 0: cat file.txt      [EXITED 0]                │
- *   │   Stage 1: grep ERROR        [RUNNING]                 │
- *   │   Stage 2: sort              [BLOCKED]                 │
- *   │   Stage 3: uniq -c           [WAITING]                 │
+ *   │ > Stage 0: cat file.txt      [EXITED 0]                 │
+ *   │   Stage 1: grep ERROR        [RUNNING]                  │
+ *   │   Stage 2: sort              [BLOCKED]                  │
+ *   │   Stage 3: uniq -c           [WAITING]                  │
  *   ├─────────────────────────────────────────────────────────┤
  *   │ Data flow at t=3.21ms                                   │
- *   │ ─── Stage 0 OUT (12 bytes) ───                         │
+ *   │ ─── Stage 0 OUT (12 bytes) ───                          │
  *   │ hello world                                             │
- *   │ ─── Stage 1 IN  (12 bytes) ───                         │
+ *   │ ─── Stage 1 IN  (12 bytes) ───                          │
  *   │ hello world                                             │
  *   ├─────────────────────────────────────────────────────────┤
- *   │ [←/→] scrub  [j/k] step  [0-9] stage  [h] hex  [q] quit│
+ *   │ [←/→] scrub  [j/k] step  [0-9] stage  [h] hex  [q] quit │
  *   └─────────────────────────────────────────────────────────┘
  *
  * Controls:
@@ -66,7 +66,7 @@ typedef struct {
     int           capture_running;
 
     /* Stage state tracking */
-    uint8_t      *stage_states;  /* per-stage: 0=waiting, 1=running, 2=exited */
+    uint8_t      *stage_states;         /* per-stage: 0=waiting, 1=running, 2=exited */
     int          *exit_codes;
 } TuiState;
 
