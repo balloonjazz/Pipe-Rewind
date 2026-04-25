@@ -8,6 +8,39 @@
 #include <errno.h>
 #include <sys/wait.h>
 
+/* Enum representing the current state of the parser 
+ * NORMAL       - Reading within the context of no string
+ * SINGLE_QUOTE - Reading within the context of a single-quoted string
+ * DOUBLE_QUOTE - Reading within the context of a double-quoted string
+ * */
+enum parse_state { NORMAL, SINGLE_QUOTE, DOUBLE_QUOTE };
+
+const char *pipeline_strerror(PipelineResult err) {
+    switch (err) {
+        /* parsing errors */
+        case PIPELINE_ERR_MEMORY:
+            return "out of memory";
+        case PIPELINE_ERR_PARSE_TOO_MANY_ARGS:
+            return "max argc exceeded";
+        case PIPELINE_ERR_PARSE_TOO_MANY_STAGES:
+            return "max stages exceeded";
+        case PIPELINE_ERR_PARSE_EMPTY_STAGE:
+            return "attempt to parse empty stage";
+        case PIPELINE_ERR_PARSE_UNTERMINATED_QUOTE:
+            return "unterminated quote";
+
+        /* process errors */
+        case PIPELINE_ERR_EXEC:
+            return "exec failed";
+        case PIPELINE_ERR_FORK:
+            return "fork failed";
+        case PIPELINE_ERR_PIPE:
+            return "pipe creation failed";
+        default:
+            return "";
+    }
+}
+
 /* ---- Parsing ---- */
 
 /*
@@ -20,10 +53,10 @@
  *
  * Tokens are split on unquoted whitespace.
  */
-static int split_args(const char *cmd, char **argv, int max_args,
-                      char *outbuf, int outbuf_size)
+static PipelineResult split_args(const char *cmd, char **argv, int max_args,
+                      char *outbuf, int outbuf_size, int *argc_out)
 {
-    enum { NORMAL, SINGLE_Q, DOUBLE_Q } state = NORMAL;
+    enum parse_state state = NORMAL;
     int argc = 0;
     int out  = 0;        /* position in outbuf */
     int in_token = 0;
@@ -35,44 +68,58 @@ static int split_args(const char *cmd, char **argv, int max_args,
         switch (state) {
         case NORMAL:
             if (*p == '\'') {
-                state = SINGLE_Q;
+                state = SINGLE_QUOTE;
                 if (!in_token) {
-                    if (argc >= max_args - 1) goto done;
+                    if (argc >= max_args - 1)
+                        return PIPELINE_ERR_PARSE_TOO_MANY_ARGS;
+
                     argv[argc] = &outbuf[out];
                     in_token = 1;
                 }
+
             } else if (*p == '"') {
-                state = DOUBLE_Q;
+                state = DOUBLE_QUOTE;
                 if (!in_token) {
-                    if (argc >= max_args - 1) goto done;
+                    if (argc >= max_args - 1)
+                        return PIPELINE_ERR_PARSE_TOO_MANY_ARGS;
+
                     argv[argc] = &outbuf[out];
                     in_token = 1;
                 }
+
             } else if (*p == '\\' && *(p + 1) != '\0') {
                 if (!in_token) {
-                    if (argc >= max_args - 1) goto done;
+                    if (argc >= max_args - 1)
+                        return PIPELINE_ERR_PARSE_TOO_MANY_ARGS;
+
                     argv[argc] = &outbuf[out];
                     in_token = 1;
                 }
                 p++;
                 outbuf[out++] = *p;
+
+            /* handling whitespace */
             } else if (*p == ' ' || *p == '\t') {
                 if (in_token) {
                     outbuf[out++] = '\0';
                     argc++;
                     in_token = 0;
                 }
+
             } else {
                 if (!in_token) {
-                    if (argc >= max_args - 1) goto done;
+                    if (argc >= max_args - 1)
+                        return PIPELINE_ERR_PARSE_TOO_MANY_ARGS;
+
                     argv[argc] = &outbuf[out];
                     in_token = 1;
                 }
                 outbuf[out++] = *p;
+
             }
             break;
 
-        case SINGLE_Q:
+        case SINGLE_QUOTE:
             if (*p == '\'') {
                 state = NORMAL;
             } else {
@@ -80,13 +127,17 @@ static int split_args(const char *cmd, char **argv, int max_args,
             }
             break;
 
-        case DOUBLE_Q:
+        case DOUBLE_QUOTE:
+            /* closing quote */
             if (*p == '"') {
                 state = NORMAL;
+
+            /* handling escape character */
             } else if (*p == '\\' && *(p + 1) != '\0' &&
                        (*(p + 1) == '"' || *(p + 1) == '\\')) {
                 p++;
                 outbuf[out++] = *p;
+
             } else {
                 outbuf[out++] = *p;
             }
@@ -94,21 +145,26 @@ static int split_args(const char *cmd, char **argv, int max_args,
         }
     }
 
-done:
+    /* handling unterminated quote */
+    if (state != NORMAL)
+        return PIPELINE_ERR_PARSE_UNTERMINATED_QUOTE;
+
+    /* pushing remaining token */
     if (in_token) {
         outbuf[out++] = '\0';
         argc++;
     }
-
+    *argc_out = argc;
     argv[argc] = NULL;
-    return argc;
+
+    return PIPELINE_OK;
 }
 
 /*
  * Split a command line on unquoted '|' characters into pipeline stages.
  * Respects single quotes, double quotes, and backslash escapes.
  */
-int pipeline_parse(const char *cmdline, Pipeline *pl)
+PipelineResult pipeline_parse(const char *cmdline, Pipeline *pl)
 {
     memset(pl, 0, sizeof(*pl));
 
@@ -116,29 +172,32 @@ int pipeline_parse(const char *cmdline, Pipeline *pl)
 
     /* Find unquoted pipe characters to split into segments */
     const char *seg_start = cmdline;
-    enum { NORM, SQ, DQ } state = NORM;
+    enum parse_state state = NORMAL;
 
     for (int i = 0; i <= len; i++) {
         char c = (i < len) ? cmdline[i] : '\0';
         int is_pipe = 0;
 
         switch (state) {
-        case NORM:
-            if (c == '\'')      state = SQ;
-            else if (c == '"')  state = DQ;
+        case NORMAL:
+            if (c == '\'')      state = SINGLE_QUOTE;
+            else if (c == '"')  state = DOUBLE_QUOTE;
             else if (c == '\\' && i + 1 < len) { i++; continue; }
             else if (c == '|' || c == '\0') is_pipe = 1;
             break;
-        case SQ:
-            if (c == '\'') state = NORM;
+        case SINGLE_QUOTE:
+            if (c == '\'') state = NORMAL;
             break;
-        case DQ:
-            if (c == '"') state = NORM;
+        case DOUBLE_QUOTE:
+            if (c == '"') state = NORMAL;
             else if (c == '\\' && i + 1 < len) { i++; continue; }
             break;
         }
 
-        if (is_pipe && pl->num_stages < MAX_STAGES) {
+        if (is_pipe) {
+            if (pl->num_stages >= MAX_STAGES)
+                return PIPELINE_ERR_PARSE_TOO_MANY_STAGES;
+
             /* Extract this segment */
             int seg_len = (int)(&cmdline[i] - seg_start);
             if (seg_len <= 0 && c == '|') {
@@ -165,13 +224,17 @@ int pipeline_parse(const char *cmdline, Pipeline *pl)
 
             /* Parse into argv using the quoting-aware tokenizer */
             char *argbuf = malloc(trimmed_len + 1);
-            if (!argbuf) return -1;
-            s->argc = split_args(s->raw_cmd, s->argv, MAX_ARGS,
-                                 argbuf, trimmed_len + 1);
+            if (!argbuf) 
+                return PIPELINE_ERR_MEMORY;
 
-            if (s->argc == 0) {
+            /* propagating error if tokenizer fails */
+            PipelineResult err;
+            err = split_args(s->raw_cmd, s->argv, MAX_ARGS, 
+                    argbuf, trimmed_len + 1, &s->argc);
+
+            if (err != PIPELINE_OK) {
                 free(argbuf);
-                return -1;
+                return err;
             }
 
             /* Note: argv pointers point into argbuf which we intentionally
@@ -184,9 +247,9 @@ int pipeline_parse(const char *cmdline, Pipeline *pl)
     }
 
     if (pl->num_stages == 0)
-        return -1;
+        return PIPELINE_ERR_PARSE_EMPTY_STAGE;
 
-    return 0;
+    return PIPELINE_OK;
 }
 
 /* ---- Execution with interposed capture pipes ---- */
@@ -221,7 +284,7 @@ static int set_nonblock(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-int pipeline_exec(const Pipeline *pl, PipelineExec *pe)
+PipelineResult pipeline_exec(const Pipeline *pl, PipelineExec *pe)
 {
     memset(pe, 0, sizeof(*pe));
     pe->num_stages = pl->num_stages;
@@ -243,24 +306,21 @@ int pipeline_exec(const Pipeline *pl, PipelineExec *pe)
     /* Create all pipes first */
     for (int i = 0; i < n - 1; i++) {
         if (pipe(out_pipes[i]) < 0 || pipe(in_pipes[i]) < 0) {
-            perror("pipe");
-            return -1;
+            return PIPELINE_ERR_PIPE;
         }
     }
 
     /* Also capture the last stage's stdout */
     int last_out[2] = {-1, -1};
     if (pipe(last_out) < 0) {
-        perror("pipe");
-        return -1;
+        return PIPELINE_ERR_PIPE;
     }
 
     /* Spawn each stage */
     for (int i = 0; i < n; i++) {
         pid_t pid = fork();
         if (pid < 0) {
-            perror("fork");
-            return -1;
+            return PIPELINE_ERR_FORK;
         }
 
         if (pid == 0) {
@@ -337,12 +397,12 @@ int pipeline_exec(const Pipeline *pl, PipelineExec *pe)
         }
     }
 
-    return 0;
+    return PIPELINE_OK;
 }
 
-int pipeline_wait(PipelineExec *pe, int exit_codes[], int num_stages)
+PipelineResult pipeline_wait(PipelineExec *pe, int exit_codes[])
 {
-    for (int i = 0; i < num_stages; i++) {
+    for (int i = 0; i < pe->num_stages; i++) {
         int status = 0;
         if (pe->procs[i].pid > 0) {
             waitpid(pe->procs[i].pid, &status, 0);
@@ -354,7 +414,7 @@ int pipeline_wait(PipelineExec *pe, int exit_codes[], int num_stages)
                 exit_codes[i] = -1;
         }
     }
-    return 0;
+    return PIPELINE_OK;
 }
 
 void pipeline_cleanup(PipelineExec *pe)

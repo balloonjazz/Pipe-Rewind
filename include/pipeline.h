@@ -20,7 +20,24 @@ typedef struct {
     char  *argv[MAX_ARGS];
     char   raw_cmd[MAX_CMD_LEN];  /* original command string for display */
     int    argc;
+    char *argbuf; 
 } PipelineStage;
+
+typedef enum {
+    PIPELINE_OK = 0,
+
+    /* Parsing errors */
+    PIPELINE_ERR_PARSE_EMPTY_STAGE,
+    PIPELINE_ERR_PARSE_UNTERMINATED_QUOTE,
+    PIPELINE_ERR_PARSE_TOO_MANY_ARGS,
+    PIPELINE_ERR_PARSE_TOO_MANY_STAGES,
+
+    /* System errors */
+    PIPELINE_ERR_PIPE,
+    PIPELINE_ERR_FORK,
+    PIPELINE_ERR_EXEC,
+    PIPELINE_ERR_MEMORY,
+} PipelineResult;
 
 /*
  * Parsed pipeline: an ordered list of stages.
@@ -38,8 +55,8 @@ typedef struct {
  */
 typedef struct {
     pid_t  pid;
-    int    capture_in_fd;    /* fd we read to see what this stage receives */
-    int    capture_out_fd;   /* fd we read to see what this stage produces */
+    int    capture_in_fd;    /* fd we write in order to feed this stage's stdin (capture engine output) */
+    int    capture_out_fd;   /* fd we read from to observe this stage's stdout */
 } StageProcess;
 
 typedef struct {
@@ -55,7 +72,7 @@ typedef struct {
  *
  * Returns 0 on success, -1 on parse error.
  */
-int pipeline_parse(const char *cmdline, Pipeline *pl);
+PipelineResult pipeline_parse(const char *cmdline, Pipeline *pl);
 
 /*
  * Execute a parsed pipeline with interposed capture pipes.
@@ -69,17 +86,22 @@ int pipeline_parse(const char *cmdline, Pipeline *pl);
  *
  * Returns 0 on success, -1 on error.
  */
-int pipeline_exec(const Pipeline *pl, PipelineExec *pe);
+PipelineResult pipeline_exec(const Pipeline *pl, PipelineExec *pe);
 
 /*
  * Wait for all pipeline processes to finish.
  * Populates exit_codes[] (one per stage).
  * Returns 0 on success.
  */
-int pipeline_wait(PipelineExec *pe, int exit_codes[], int num_stages);
+PipelineResult pipeline_wait(PipelineExec *pe, int exit_codes[]);
 
 /*
  * Free resources (close remaining fds, etc.)
+ */
+void pipeline_cleanup(PipelineExec *pe);
+
+/*
+ * Free memory allocated during parsing
  */
 void pipeline_cleanup(PipelineExec *pe);
 
