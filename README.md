@@ -89,7 +89,9 @@ In the live demo you will see the back and forth scrubbing of the timeline.
 
 ## Challenges Encountered & Lessons Learned
 1.Pipe topology complexity was the first real wall we hit. Getting the supervisor to sit between every stage without breaking the pipeline's natural behavior required careful management of which ends of which pipes the parent held open versus which the children inherited. A single fd left open in the wrong process caused stages to hang indefinitely waiting for EOF that never came. The lesson: draw the full pipe diagram on paper before writing a single line of dup2.
+
 2.Binary trace format correctness was harder than expected. Our first trace_writer_finalize implementation rewrote the file header from scratch, which silently zeroed out the wall-clock start time that had been written at open time. We didn't catch it until the dump command started showing wrong timestamps. The fix was simple — read the original header back before patching it — but it taught us to be deliberate about which fields are written when.
+
 3.The LCS diff algorithm doesn't scale naively. Our diff_compute function allocates an O(n·m) table, which works fine for typical pipeline output but hits memory limits for large inputs. We added a 2000-line cap with a sequential fallback, which taught us that correctness under normal conditions isn't enough — you have to think about what happens when inputs are pathological.
 
 ## Team
