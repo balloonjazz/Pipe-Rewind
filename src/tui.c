@@ -146,11 +146,13 @@ static int tui_load_window(TuiState *ts, uint32_t center_idx)
             uint32_t gidx = start + i;
             if (trace_reader_read_event_at(&ts->reader, gidx, &ts->events[i], NULL, 0) == 0) {
                 if (ts->events[i].payload_len > 0) {
-                    ts->payloads[i] = malloc(ts->events[i].payload_len);
-                    if (ts->payloads[i]) {
-                        if (fread(ts->payloads[i], 1, ts->events[i].payload_len, ts->reader.fp) != ts->events[i].payload_len) {
-                            free(ts->payloads[i]);
-                            ts->payloads[i] = NULL;
+                        ts->payloads[i] = malloc(ts->events[i].payload_len);
+                        if (trace_reader_read_event_at(&ts->reader, gidx,
+                        &ts->events[i],
+                        ts->payloads[i],
+                        ts->events[i].payload_len) != 0) {
+                    free(ts->payloads[i]);
+                    ts->payloads[i] = NULL;
                         }
                     }
                 }

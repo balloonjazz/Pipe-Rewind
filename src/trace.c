@@ -130,14 +130,16 @@ int trace_writer_finalize(TraceWriter *tw)
     /* Go back and update the file header */
     fseek(tw->fp, 0, SEEK_SET);
 
-    TraceFileHeader hdr = {0};
-    hdr.magic          = PRT_MAGIC;
-    hdr.version        = PRT_VERSION;
-    hdr.num_stages     = tw->num_stages;
-    hdr.start_time_ns  = tw->start_time_ns;
-    hdr.wall_start_sec = 0; /* already written */
-    hdr.num_events     = tw->num_events;
-    hdr.index_offset   = index_offset;
+    TraceFileHeader hdr;
+    if (fread(&hdr, sizeof(hdr), 1, tw->fp) != 1)
+
+        return -1;
+
+    hdr.num_events   = tw->num_events;
+
+    hdr.index_offset = index_offset;
+
+    fseek(tw->fp, 0, SEEK_SET);
 
     if (fwrite(&hdr, sizeof(hdr), 1, tw->fp) != 1)
         return -1;
