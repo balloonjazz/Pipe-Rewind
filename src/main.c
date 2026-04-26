@@ -7,6 +7,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <signal.h>
+
+static CaptureEngine *g_active_ce = NULL;
+
+static void sigint_handler(int sig)
+{
+    (void)sig;
+    if (g_active_ce) {
+        trace_writer_finalize(&g_active_ce->writer);
+        trace_writer_close(&g_active_ce->writer);
+        g_active_ce = NULL;
+    }
+    signal(SIGINT, SIG_DFL);
+    raise(SIGINT);
+}
 
 static void usage(const char *prog)
 {
@@ -149,8 +164,14 @@ static int cmd_record(const char *cmdline, const char *trace_path,
     fprintf(stderr, "piperewind: recording \"%s\" -> %s\n",
             cmdline, trace_path);
 
+    g_active_ce = &ce;
+    signal(SIGINT, sigint_handler);
+    
     int ret = capture_run(&ce);
 
+    g_active_ce = NULL;
+    signal(SIGINT, SIG_DFL);
+    
     capture_destroy(&ce);
 
     if (ret == 0) {
