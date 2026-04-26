@@ -1,3 +1,4 @@
+#ifndef CAPTURE_H
 #define CAPTURE_H
 
 #include "pipeline.h"
@@ -21,6 +22,7 @@ typedef struct {
     TraceWriter   writer;
     const char   *trace_path;
     int           verbose;
+    volatile int stop_requested;
 } CaptureEngine;
 
 /*
@@ -43,4 +45,4 @@ int capture_run(CaptureEngine *ce);
  */
 void capture_destroy(CaptureEngine *ce);
 
-
+#endif

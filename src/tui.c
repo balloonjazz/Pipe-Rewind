@@ -810,7 +810,8 @@ int tui_run(const char *trace_path)
 
 struct LiveCaptureArgs {
     CaptureEngine ce;
-    int done;
+    volatile int done;
+    volatile int stop_requested;
 };
 
 static void *capture_thread_func(void *arg)
@@ -861,7 +862,10 @@ int tui_run_live(const char *trace_path, const char *pipeline_cmd)
     ts.stage_states = calloc(ts.reader.header.num_stages, 1);
     ts.exit_codes   = calloc(ts.reader.header.num_stages, sizeof(int));
     if (!ts.stage_states || !ts.exit_codes) {
+        free(ts.stage_states);          
+        free(ts.exit_codes);            
         trace_reader_close(&ts.reader);
+        args.ce.stop_requested = 1;     
         pthread_join(thread, NULL);
         return -1;
     }
@@ -949,15 +953,13 @@ int tui_run_live(const char *trace_path, const char *pipeline_cmd)
 
     endwin();
 
+    free(ts.stage_states);          
+    free(ts.exit_codes);            
     trace_reader_close(&ts.reader);
     tui_free_window(&ts);
 
-    /* Clean up background thread if it's still running */
-    if (!args.done) {
-        /* Pipelined processes will exit when the TUI exits if we kill them?
-         * For now, just detach or wait */
-        pthread_cancel(thread);
-    }
+    if (!args.done)
+        args.ce.stop_requested = 1; 
     pthread_join(thread, NULL);
 
     return 0;
